@@ -368,11 +368,6 @@ def click_skip(p):
 
 def find_dest_in_page(p, ex_domains, force=False):
     try:
-        cu = safe_url(p)
-        cd = urlparse(cu).netloc
-        # Skip auto-redirect on known PPC domains — let the hop loop handle them
-        if not force and any(x in cd for x in PPC_DOMAINS):
-            return False, None
         txt = (p.execute_script("return document.body.innerText||''") or "").lower()
         if not force and any(ind in txt for ind in PPC_INDICATORS):
             return False, None
@@ -428,8 +423,7 @@ def parse_ppc_actions(txt):
     if "get link" in t or "download" in t or "your link is almost ready" in t or "gate link" in t:
         actions.append("get_link")
     if not actions:
-        if "continue" in t or "next" in t:
-            actions.append("continue_generic")
+        actions = []  # no generic continue — let hop loop fallback to find_dest_in_page
     actions = list(OrderedDict.fromkeys(actions))
     return actions
 
@@ -541,12 +535,6 @@ def exec_ppc_action(p, a, ex_domains):
     if a == "unlock":
         for t in ["I'M Not Robot","Not Robot","Unlock","IM","I'M"]:
             if click_any(p, t): time.sleep(2); break
-        return False, None
-
-    if a == "continue_generic":
-        for t in ["Continue","continue","CONTINUE","Next","next","NEXT"]:
-            if click_any(p, t):
-                time.sleep(2); break
         return False, None
 
     if a == "timer":

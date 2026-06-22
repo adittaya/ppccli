@@ -12,7 +12,7 @@
 
 ## Navigation Flow
 
-- **11 action types**: `verify`, `click_ads`, `unlock`, `timer`, `get_link`, `scroll_continue`, `click_image`, `step2`, `not_interested`, `telegram`, `continue_generic` — parsed from page text each hop
+- **10 action types**: `verify`, `click_ads`, `unlock`, `timer`, `get_link`, `scroll_continue`, `click_image`, `step2`, `not_interested`, `telegram` — parsed from page text each hop
 - **45-hop max loop** per view — aborts earlier if destination found
 - **Gateway handler**: clicks "Continue to Next" on entry pages (first 3 hops)
 - **`#goog_rewarded` interstitial handler**: scrolls, clicks Continue/Skip/Close, breaks early when found
