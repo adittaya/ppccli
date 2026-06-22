@@ -448,7 +448,7 @@ def exec_ppc_action(p, a, ex_domains):
         try:
             p.execute_script("""
                 var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
-                for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
+                for(var i=0;i<els.length;i++){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
                 return false;
             """)
         except: pass
