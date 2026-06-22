@@ -41,6 +41,17 @@ EX_DOMAINS = PPC_DOMAINS + [
 SOCIAL_DOMAINS = ["wa.me", "api.whatsapp.com", "facebook.com/share", "twitter.com/intent",
                   "x.com/intent", "linkedin.com/share", "t.me", "telegram.me"]
 
+# PPC domain chain: when on a domain, the expected next hop in the flow
+PPC_CHAIN = {
+    "rank1st.in": ["savepe.in", "savepe."],
+    "roadtaxcalculator.": ["savepe.in", "savepe."],
+    "roadtaxcalculatorr.": ["savepe.in", "savepe."],
+    "savepe.in": ["bookyourhotel."],
+    "savepe.": ["bookyourhotel."],
+    "hittracks.": ["krishitalk."],
+    "krishitalk.": ["arolinks.", "vplink."],
+}
+
 ANDROID_VERSIONS = ["10","11","12","12.1","13","14","15"]
 DEVICE_MODELS = [
     "Pixel 7","Pixel 7 Pro","Pixel 8","Pixel 8 Pro","Pixel 9",
@@ -445,6 +456,28 @@ def exec_ppc_action(p, a, ex_domains):
 
     if a == "scroll_continue":
         scroll_incremental(p, 15)
+        # Try domain-chain navigation first: find a link to the next PPC domain
+        cu = safe_url(p)
+        cd = urlparse(cu).netloc
+        next_domains = []
+        for pcd, nxt in PPC_CHAIN.items():
+            if pcd in cd:
+                next_domains = nxt
+                break
+        if next_domains:
+            try:
+                links = p.execute_script("""
+                    var results = []; var els = document.querySelectorAll('a[href]');
+                    for(var i=0;i<els.length;i++){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0&&e.href.indexOf('javascript')!==0){results.push(e.href);}}
+                    return results;
+                """) or []
+                for href in links:
+                    hn = urlparse(href).netloc
+                    if any(x in hn for x in next_domains):
+                        try: p.get(href); time.sleep(3); return False, None
+                        except: pass
+            except: pass
+        # Fallback: try clicking Continue elements as before
         try:
             p.execute_script("""
                 var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
