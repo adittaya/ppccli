@@ -907,69 +907,89 @@ def _worker_process(url, worker_id, result_queue):
         ok = False
     result_queue.put((worker_id, url, ok))
 
-def orchestrate_parallel(urls, windows, views, rotate, no_vnc):
-    """Parallel orchestrator: sessions → rotate IP → start all workers → summary."""
-    workers = []
+def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc):
+    """Parallel orchestrator: sessions → rotate IP → start all workers → summary.
+    
+    Workers marked same_ip=True are launched together in one session on one IP.
+    Workers marked same_ip=False each get their own session with IP rotation.
+    """
+    # Build worker groups: (same_ip, url, id) tuples
     wid = 0
+    groups = []  # list of lists: each group = [worker, worker, ...]
     for ui, u in enumerate(urls):
+        same = same_ips[ui] if ui < len(same_ips) else True
+        batch = []
         for _ in range(windows[ui] if ui < len(windows) else 1):
-            workers.append({"id": wid, "url": u, "label": f"URL{ui+1}.{wid+1}"})
+            batch.append({"id": wid, "url": u, "label": f"URL{ui+1}.{wid+1}", "same_ip": same})
             wid += 1
+        if same:
+            groups.append(batch)
+        else:
+            for w in batch:
+                groups.append([w])
 
-    if not workers:
+    all_workers = [w for g in groups for w in g]
+    if not all_workers:
         print("  No workers defined.", flush=True)
         return False
 
-    print(f"\n  Parallel workers: {len(workers)}", flush=True)
-    for w in workers:
-        ip_info = f"Display :{99 + w['id']}" + (f"  VNC :{5900 + w['id']}" if not no_vnc else "")
-        print(f"    [{w['label']}] {w['url'][:60]}  ({ip_info})", flush=True)
+    print(f"\n  Parallel workers: {len(all_workers)} in {len(groups)} group(s)", flush=True)
+    for gi, g in enumerate(groups):
+        same_label = "same IP" if len(g) > 1 and g[0]["same_ip"] else "separate session"
+        for w in g:
+            ip_info = f"Display :{99 + w['id']}" + (f"  VNC :{5900 + w['id']}" if not no_vnc else "")
+            print(f"    Group {gi+1} [{w['label']}] {w['url'][:55]}  ({ip_info})", flush=True)
 
+    session_count = 0
     for session in range(views):
-        print(f"\n{'='*60}", flush=True)
-        print(f"  Session {session+1}/{views}  |  {len(workers)} workers  |  "
-              f"{'with IP rotation' if rotate else 'no IP rotation'}", flush=True)
-        print(f"{'='*60}", flush=True)
+        for gi, group in enumerate(groups):
+            session_count += 1
+            group_label = f"Group {gi+1}" if len(groups) > 1 else ""
+            print(f"\n{'='*60}", flush=True)
+            print(f"  Session {session_count}  {group_label}  |  {len(group)} worker(s)  |  "
+                  f"{'with IP rotation' if rotate else 'no IP rotation'}", flush=True)
+            print(f"{'='*60}", flush=True)
 
-        if rotate:
-            print(f"\n  Rotating IP before session {session+1}...", flush=True)
-            ip_ok = rotate_ip()
-            time.sleep(2)
-            current_ip = check_ip()
-            print(f"  Global IP: {current_ip or 'unknown'}", flush=True)
+            if rotate:
+                print(f"\n  Rotating IP before session...", flush=True)
+                ip_ok = rotate_ip()
+                time.sleep(2)
+                current_ip = check_ip()
+                print(f"  Global IP: {current_ip or 'unknown'}", flush=True)
 
-        rq = mp_ctx.Queue()
-        procs = []
-        for w in workers:
-            p = mp_ctx.Process(target=_worker_process, args=(w["url"], w["id"], rq))
-            p.start()
-            procs.append(p)
-            print(f"  [Started] Worker {w['id']} ({w['label']}) — Display :{99 + w['id']}", flush=True)
+            rq = mp_ctx.Queue()
+            procs = []
+            for w in group:
+                p = mp_ctx.Process(target=_worker_process, args=(w["url"], w["id"], rq))
+                p.start()
+                procs.append(p)
+                print(f"  [Started] {w['label']} — Display :{99 + w['id']}", flush=True)
 
-        for p in procs:
-            p.join()
+            for p in procs:
+                p.join()
 
-        results = []
-        while not rq.empty():
-            results.append(rq.get())
+            results = []
+            while not rq.empty():
+                results.append(rq.get())
 
-        successes = sum(1 for r in results if r[2])
-        total = len(results)
-        rate = (successes * 100 // total) if total else 0
+            successes = sum(1 for r in results if r[2])
+            total = len(results)
+            rate = (successes * 100 // total) if total else 0
 
-        print(f"\n  {'='*40}", flush=True)
-        print(f"  Session {session+1} Summary", flush=True)
-        print(f"  {'='*40}", flush=True)
-        for r in sorted(results, key=lambda x: x[0]):
-            status = "[✓] SUCCESS" if r[2] else "[✗] FAILED"
-            print(f"    Worker {r[0]}: {status}", flush=True)
-        print(f"  {'='*40}", flush=True)
-        print(f"  Result: {successes}/{total} succeeded  ({rate}%)", flush=True)
-
-        if successes > 0:
+            print(f"\n  {'='*40}", flush=True)
+            print(f"  Session {session_count} Summary", flush=True)
             print(f"  {'='*40}", flush=True)
-            print(f"  ALL SESSIONS COMPLETE", flush=True)
-            return True
+            for r in sorted(results, key=lambda x: x[0]):
+                status = "[✓] SUCCESS" if r[2] else "[✗] FAILED"
+                print(f"    Worker {r[0]}: {status}", flush=True)
+            print(f"  {'='*40}", flush=True)
+            print(f"  Result: {successes}/{total} succeeded  ({rate}%)", flush=True)
+
+            if successes > 0:
+                print(f"  {'='*40}", flush=True)
+                if all(w["same_ip"] for w in group):
+                    print(f"  ALL GROUPS COMPLETE — stopping", flush=True)
+                return True
 
     print(f"\n  All sessions exhausted — no successful views.", flush=True)
     return False
@@ -985,6 +1005,7 @@ def interactive_parallel():
 
     urls = []
     windows = []
+    same_ips = []
 
     def add_url(net_name, net_example):
         url = ""
@@ -997,8 +1018,11 @@ def interactive_parallel():
             win = int(win_str) if win_str else 1
         except ValueError:
             win = 1
+        same_str = input(f"  Same IP for all windows? (Y/n): ").strip().lower()
+        same = same_str not in ("n", "no")
         urls.append(url)
         windows.append(win)
+        same_ips.append(same)
         return url
 
     print("  Enter URLs for each network (blank line to skip):")
@@ -1019,8 +1043,11 @@ def interactive_parallel():
             win = int(win_str) if win_str else 1
         except ValueError:
             win = 1
+        same_str = input(f"  Same IP for all windows? (Y/n): ").strip().lower()
+        same = same_str not in ("n", "no")
         urls.append(url)
         windows.append(win)
+        same_ips.append(same)
 
     if not urls:
         print("  No URLs provided. Exiting.", flush=True)
@@ -1060,7 +1087,8 @@ def interactive_parallel():
     print()
     print(f"  URLs:     {len(urls)}")
     for i, u in enumerate(urls):
-        print(f"    URL{i+1}: {u[:64]}  ({windows[i]} window{'s' if windows[i] > 1 else ''})")
+        same_label = "same IP" if same_ips[i] else "separate IPs"
+        print(f"    URL{i+1}: {u[:60]}  ({windows[i]} win, {same_label})")
     print(f"  Workers:  {total_workers}")
     print(f"  Sessions: {views}")
     print(f"  Rotate:   {'yes' if rotate else 'no'}")
@@ -1073,7 +1101,7 @@ def interactive_parallel():
         print("  Cancelled.")
         sys.exit(0)
 
-    return urls, windows, views, rotate, no_vnc
+    return urls, windows, same_ips, views, rotate, no_vnc
 
 # ──────────────────────────────────────────────
 # CLI
@@ -1089,8 +1117,8 @@ def interactive_prompt():
 
     mode = input("  Mode: (s)ingle or (p)arallel? [s]: ").strip().lower()
     if mode in ("p", "parallel"):
-        urls, windows, views, rotate, no_vnc = interactive_parallel()
-        return urls, windows, views, rotate, no_vnc, True
+        urls, windows, same_ips, views, rotate, no_vnc = interactive_parallel()
+        return urls, windows, same_ips, views, rotate, no_vnc, True
 
     print()
     print("  Network:")
@@ -1160,6 +1188,8 @@ def main():
     parser.add_argument("-n", "--views", type=int, default=1, help="Number of views/sessions (default: 1)")
     parser.add_argument("-w", "--windows", type=int, default=1, help="Windows per URL in parallel mode (default: 1)")
     parser.add_argument("--no-rotate", action="store_true", help="Skip IP rotation")
+    parser.add_argument("--same-ip", action="store_true", default=True, dest="same_ip", help="All windows share same IP (default)")
+    parser.add_argument("--no-same-ip", action="store_false", dest="same_ip", help="Each window gets separate IP session")
     parser.add_argument("--no-vnc", action="store_true", help="Skip VNC server startup")
     parser.add_argument("-r", "--referrer", help="YouTube referrer URL")
     args = parser.parse_args()
@@ -1170,9 +1200,9 @@ def main():
     if args.interactive or not args.url:
         result = interactive_prompt()
         if result[-1]:  # is_parallel flag
-            urls, windows, views, rotate, no_vnc, _ = result
+            urls, windows, same_ips, views, rotate, no_vnc, _ = result
             rotate = rotate if not args.no_rotate else False
-            orchestrate_parallel(urls, windows, views, rotate, no_vnc)
+            orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc)
         else:
             url, views, _, _, _, _ = result
             if args.referrer:
@@ -1182,11 +1212,12 @@ def main():
         if args.parallel:
             urls = args.url
             windows = [args.windows] * len(urls)
+            same_ips = [args.same_ip] * len(urls)
             rotate = not args.no_rotate
             no_vnc = args.no_vnc
             if args.referrer:
                 os.environ["REFERRER_URL"] = args.referrer
-            orchestrate_parallel(urls, windows, args.views, rotate, no_vnc)
+            orchestrate_parallel(urls, windows, same_ips, args.views, rotate, no_vnc)
         else:
             url = args.url[0]
             views = args.views
