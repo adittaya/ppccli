@@ -474,15 +474,25 @@ def exec_ppc_action(p, a, ex_domains):
                             return False, None
                 except: pass
                 break
-        # Fallback: click Continue repeatedly until domain changes
+        # Fallback: click Continue repeatedly (priority: button > a) until domain changes
         for _ in range(5):
             try:
-                p.execute_script("""
-                    var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
-                    for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
+                clicked = p.execute_script("""
+                    // Priority 1: visible buttons with CONTINUE text
+                    var els = document.querySelectorAll('button, input[type="submit"], [role="button"], [class*="btn"]');
+                    for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();return true;}}}
+                    // Priority 2: <a> links with CONTINUE text
+                    var al = document.querySelectorAll('a');
+                    for(var i=al.length-1;i>=0;i--){var e=al[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();return true;}}}
+                    // Priority 3: any element with class/id containing continue
+                    var cx = document.querySelectorAll('[class*="continue"],[id*="continue"]');
+                    for(var i=cx.length-1;i>=0;i--){var e=cx[i];if(e.offsetWidth>0&&e.offsetHeight>0&&e.tagName!='HTML'&&e.tagName!='BODY'){e.scrollIntoView({block:'center',behavior:'instant'});e.click();return true;}}
                     return false;
                 """)
-            except: pass
+            except:
+                clicked = False
+            if not clicked:
+                break
             time.sleep(2)
             cu2 = safe_url(p); cd2 = urlparse(cu2).netloc
             if cd2 != cd:
