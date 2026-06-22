@@ -4,7 +4,7 @@
 
 ## Core
 
-- **Universal PPC support**: VPLINK (`hittracks` → `krishitalk` → `vplink` → destination), LinkPays (`savepe.in`, `rank1st.in`, `roadtaxcalculator`, `bookyourhotel`), and other PPC/shortener networks — auto-detected from URL domain
+- **Universal PPC support**: VPLINK (`hittracks` → `krishitalk` → `vplink` → destination), AroLinks (`arolinks.com`, same hittracks cycle), LinkPays (`savepe.in`, `rank1st.in`, `roadtaxcalculator`, `bookyourhotel`), and other PPC/shortener networks — auto-detected from URL domain
 - **Single-file script** (`ppccli.py`) — zero dependencies beyond Selenium + Chromium
 - **Two modes**: interactive CLI (`-i` / no args) or one-liner (`ppccli URL -n 10 -r "https://..."`)
 - **Symlinked CLI command** at `/usr/local/bin/ppccli` → instantly picks up repo edits
@@ -97,7 +97,7 @@
 | Network | Domains |
 |---|---|
 | **LinkPays** | `savepe.in`, `rank1st.in`, `roadtaxcalculator.`, `roadtaxcalculatorr.`, `bookyourhotel.` |
-| **VPLINK** | `hittracks.`, `krishitalk.`, `vplink.` |
+| **VPLINK / AroLinks** | `hittracks.`, `krishitalk.`, `vplink.`, `arolinks.` |
 | **Ad / shortener** | `adsterra.`, `trafficbalance.`, `adspaces.`, `adshrink.`, `shortlink.`, `shortener.`, `shorte.`, `shrinkme.`, `tinyurl.`, `bitly.` |
 
 Auto-excluded from destination detection. The flow continues hopping through these domains until a non-excluded domain is found.

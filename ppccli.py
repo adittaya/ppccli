@@ -2,6 +2,7 @@
 """
 ppccli — Universal PPC page flow navigator.
 Handles: VPLINK (hittracks → krishitalk → vplink → destination),
+AroLinks (arolinks.com, same hittracks cycle),
 LinkPays (savepe.in, rank1st.in, roadtaxcalculator, bookyourhotel),
 and other PPC networks. Single-process, quality-focused, final version.
 """
@@ -27,8 +28,8 @@ PPC_DOMAINS = [
     # LinkPays
     "savepe.in", "rank1st.in", "roadtaxcalculator.", "roadtaxcalculatorr.",
     "bookyourhotel.",
-    # VPLINK
-    "hittracks.", "krishitalk.", "vplink.",
+    # VPLINK / AroLinks
+    "hittracks.", "krishitalk.", "vplink.", "arolinks.",
     # Ad / shortener
     "adsterra.", "trafficbalance.", "adspaces.", "adshrink.",
     "shortlink.", "shortener.", "shorte.", "shrinkme.", "tinyurl.", "bitly.",
@@ -406,11 +407,12 @@ def parse_ppc_actions(txt):
         actions.append("unlock")
     if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
        re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I) or \
-       re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I):
+       re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I) or \
+       "loading the best option" in t:
         actions.append("timer")
     if "telegram" in t:
         actions.append("telegram")
-    if "get link" in t or "download" in t:
+    if "get link" in t or "download" in t or "your link is almost ready" in t:
         actions.append("get_link")
     if not actions:
         if "continue" in t or "next" in t:
@@ -893,14 +895,14 @@ def interactive_prompt():
     print()
 
     print("  Network:")
-    print("     1 → VPLINK (hittracks → krishitalk → vplink.in)")
+    print("     1 → VPLINK / AroLinks (hittracks → krishitalk)")
     print("     2 → LinkPays (savepe.in / rank1st.in)")
     print("     3 → Custom (any other PPC URL)")
     net = input("  Your choice (1-3) [1]: ").strip() or "1"
     print()
 
-    examples = {"1": "https://vplink.in/MGIt8", "2": "https://savepe.in/XXXXX", "3": "https://example.com/ppc-link"}
-    labels = {"1": "VPLINK", "2": "LinkPays", "3": "Custom"}
+    examples = {"1": "https://arolinks.com/zREqi", "2": "https://savepe.in/XXXXX", "3": "https://example.com/ppc-link"}
+    labels = {"1": "VPLINK/AroLinks", "2": "LinkPays", "3": "Custom"}
     url = ""
     while not url.strip():
         url = input(f"  {labels.get(net, 'PPC')} URL (e.g. {examples.get(net, 'https://...')}): ").strip()
