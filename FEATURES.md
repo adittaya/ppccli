@@ -1,10 +1,10 @@
 # PPCCLI — Feature Summary
 
-> Final unified PPC page flow navigator. Merges ppc-universal (multi-network) + fastppc (VPLINK-optimized) + new improvements.
+> Final unified PPC page flow navigator. Merges ppc-universal (multi-network) + fastppc (VPLINK-optimized) + new improvements. Supports VPLINK and LinkPays networks.
 
 ## Core
 
-- **Universal PPC support**: VPLINK (`hittracks` → `krishitalk` → `vplink` → destination), LinkPays, custom URL shorteners — auto-detected from URL
+- **Universal PPC support**: VPLINK (`hittracks` → `krishitalk` → `vplink` → destination), LinkPays (`savepe.in`, `rank1st.in`, `roadtaxcalculator`, `bookyourhotel`), and other PPC/shortener networks — auto-detected from URL domain
 - **Single-file script** (`ppccli.py`) — zero dependencies beyond Selenium + Chromium
 - **Two modes**: interactive CLI (`-i` / no args) or one-liner (`ppccli URL -n 10 -r "https://..."`)
 - **Symlinked CLI command** at `/usr/local/bin/ppccli` → instantly picks up repo edits
@@ -27,9 +27,9 @@
 
 ## Timer
 
-- Parses wait duration from page text (`wait 12 sec`, `10 sec link generating`)
+- Parses wait duration from page text (`wait 12 sec`, `10 sec link generating`, `linkpays 12 sec`)
 - Defaults to 12s if no match
-- **Polls body text every 2s** for "get link" or "download" — breaks early if found
+- **Polls body text every 2s** for "get link", "download", "your link", or "destination" — breaks early if found
 - Adds 3s margin beyond advertised duration
 
 ## IP Rotation
@@ -91,6 +91,16 @@
 - Page body must have > 50 characters of text (not just a blank/excluded URL)
 - PPC indicator re-check: if destination URL domain is unknown but page text contains PPC keywords, domain is added to exclusion list and loop continues
 - Fallback DOM scan (`find_dest_in_page`): scans all `<a href>` for non-excluded URLs and navigates directly
+
+## Supported Networks / Domains
+
+| Network | Domains |
+|---|---|
+| **LinkPays** | `savepe.in`, `rank1st.in`, `roadtaxcalculator.`, `roadtaxcalculatorr.`, `bookyourhotel.` |
+| **VPLINK** | `hittracks.`, `krishitalk.`, `vplink.` |
+| **Ad / shortener** | `adsterra.`, `trafficbalance.`, `adspaces.`, `adshrink.`, `shortlink.`, `shortener.`, `shorte.`, `shrinkme.`, `tinyurl.`, `bitly.` |
+
+Auto-excluded from destination detection. The flow continues hopping through these domains until a non-excluded domain is found.
 
 ## Safety Nets
 

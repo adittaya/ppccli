@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ppccli — Universal PPC page flow navigator.
-Handles: hittracks.in.net → krishitalk.com → vplink.in → destination (VPLINK),
+Handles: VPLINK (hittracks → krishitalk → vplink → destination),
+LinkPays (savepe.in, rank1st.in, roadtaxcalculator, bookyourhotel),
 and other PPC networks. Single-process, quality-focused, final version.
 """
 import os, sys, time, re, random, subprocess, threading, urllib.request
@@ -22,8 +23,17 @@ except ImportError:
 DISPLAY_NUM = int(os.environ.get("DISPLAY", ":99").lstrip(":"))
 VNC_PORT = int(os.environ.get("VNC_PORT", "5900"))
 
-VPLINK_DOMAINS = ["hittracks.", "krishitalk.", "vplink.", "adsterra.", "trafficbalance."]
-EX_DOMAINS = VPLINK_DOMAINS + [
+PPC_DOMAINS = [
+    # LinkPays
+    "savepe.in", "rank1st.in", "roadtaxcalculator.", "roadtaxcalculatorr.",
+    "bookyourhotel.",
+    # VPLINK
+    "hittracks.", "krishitalk.", "vplink.",
+    # Ad / shortener
+    "adsterra.", "trafficbalance.", "adspaces.", "adshrink.",
+    "shortlink.", "shortener.", "shorte.", "shrinkme.", "tinyurl.", "bitly.",
+]
+EX_DOMAINS = PPC_DOMAINS + [
     "about:blank", "msc", "doubleclick", "google", "facebook", "instagram",
     "youtube", "chrome-error", "chromewebdata"
 ]
@@ -375,9 +385,9 @@ def find_dest_in_page(p, ex_domains, force=False):
     return False, None
 
 # ──────────────────────────────────────────────
-# VPLINK-SPECIFIC FLOW HANDLERS
+# PPC ACTION PARSER
 # ──────────────────────────────────────────────
-def parse_vplink_actions(txt):
+def parse_ppc_actions(txt):
     t = txt.lower()
     actions = []
     if "not interested" in t or "not grant" in t:
@@ -395,7 +405,8 @@ def parse_vplink_actions(txt):
     if "i'm not robot" in t or "unlock" in t or "not robot" in t:
         actions.append("unlock")
     if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
-       re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I):
+       re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I) or \
+       re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I):
         actions.append("timer")
     if "telegram" in t:
         actions.append("telegram")
@@ -407,7 +418,7 @@ def parse_vplink_actions(txt):
     actions = list(OrderedDict.fromkeys(actions))
     return actions
 
-def exec_vplink_action(p, a, ex_domains):
+def exec_ppc_action(p, a, ex_domains):
     if a == "not_interested":
         for t in ["Continue","continue","CONTINUE","OK","Okay"]:
             if click_any(p, t): break
@@ -528,12 +539,14 @@ def exec_vplink_action(p, a, ex_domains):
         m = re.search(r'wait\s*(\d+)\s*(sec|second)', txt, re.I)
         if not m:
             m = re.search(r'(\d+)\s*(sec|second)\s*(link|generating|remaining)', txt, re.I)
+        if not m:
+            m = re.search(r'(?:linkpays\s+)?(\d+)\s*(sec|second)', txt[:200], re.I)
         sec = int(m.group(1)) if m else 12
         for i in range(0, sec + 3, 2):
             time.sleep(2)
             try:
                 body = (p.execute_script("return document.body.innerText||''") or "").lower()
-                if "get link" in body or "download" in body:
+                if "get link" in body or "download" in body or "your link" in body or "destination" in body:
                     break
             except: pass
         return False, None
@@ -760,12 +773,12 @@ def run_view(p, url):
             except: pass
             time.sleep(1)
         print(f"  Text: {txt[:120].replace(chr(10),' ')}", flush=True)
-        actions = parse_vplink_actions(txt)
+        actions = parse_ppc_actions(txt)
         print(f"  Actions: {actions}", flush=True)
 
         for a in actions:
             prev_url = safe_url(p)
-            dest_found, dest_url = exec_vplink_action(p, a, ex_domains)
+            dest_found, dest_url = exec_ppc_action(p, a, ex_domains)
             time.sleep(0.5)
 
             if dest_found:
