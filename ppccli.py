@@ -6,7 +6,7 @@ AroLinks (arolinks.com, same hittracks cycle),
 LinkPays (savepe.in, rank1st.in, roadtaxcalculator, bookyourhotel),
 and other PPC networks. Single-process, quality-focused, final version.
 """
-import os, sys, time, re, random, subprocess, threading, urllib.request
+import os, sys, time, re, random, subprocess, threading, multiprocessing, urllib.request
 from urllib.parse import urlparse
 from collections import OrderedDict
 
@@ -21,8 +21,8 @@ except ImportError:
     print("Run: pip install selenium")
     sys.exit(1)
 
-DISPLAY_NUM = int(os.environ.get("DISPLAY", ":99").lstrip(":"))
-VNC_PORT = int(os.environ.get("VNC_PORT", "5900"))
+# Display & VNC are read dynamically from os.environ in ensure_display()
+# and make_driver() to support parallel workers each with their own display.
 
 PPC_DOMAINS = [
     # LinkPays
@@ -86,29 +86,31 @@ PPC_INDICATORS = ["get link","download","verify","unlock","i'm not robot","not r
 # DISPLAY
 # ──────────────────────────────────────────────
 def ensure_display():
+    display_num = int(os.environ.get("DISPLAY", ":99").lstrip(":"))
+    vnc_port = int(os.environ.get("VNC_PORT", "5900"))
     no_vnc = os.environ.get("NO_VNC", "").lower() in ("1","true","yes")
     if not no_vnc:
-        vnc_alive = subprocess.run(f"fuser {VNC_PORT}/tcp &>/dev/null", shell=True).returncode == 0
+        vnc_alive = subprocess.run(f"fuser {vnc_port}/tcp &>/dev/null", shell=True).returncode == 0
         if vnc_alive:
             return
-    lock = f"/tmp/.X{DISPLAY_NUM}-lock"
+    lock = f"/tmp/.X{display_num}-lock"
     restart = False
     if os.path.exists(lock):
         try:
-            subprocess.run(["xdpyinfo","-display",f":{DISPLAY_NUM}"], capture_output=True, timeout=3)
+            subprocess.run(["xdpyinfo","-display",f":{display_num}"], capture_output=True, timeout=3)
         except:
             os.remove(lock)
             restart = True
     if restart or not os.path.exists(lock):
-        subprocess.run(f"pkill -9 -f 'Xvfb :{DISPLAY_NUM}' 2>/dev/null", shell=True)
+        subprocess.run(f"pkill -9 -f 'Xvfb :{display_num}' 2>/dev/null", shell=True)
         time.sleep(0.5)
-        subprocess.run(f"Xvfb :{DISPLAY_NUM} -screen 0 1366x900x24 &>/dev/null &", shell=True)
+        subprocess.run(f"Xvfb :{display_num} -screen 0 1366x900x24 &>/dev/null &", shell=True)
         time.sleep(2)
     if no_vnc:
         return
-    r = subprocess.run(f"fuser {VNC_PORT}/tcp &>/dev/null", shell=True)
+    r = subprocess.run(f"fuser {vnc_port}/tcp &>/dev/null", shell=True)
     if r.returncode != 0:
-        subprocess.run(f"x11vnc -display :{DISPLAY_NUM} -forever -shared -rfbport {VNC_PORT} -nopw -quiet -bg &>/dev/null", shell=True)
+        subprocess.run(f"x11vnc -display :{display_num} -forever -shared -rfbport {vnc_port} -nopw -quiet -bg &>/dev/null", shell=True)
         time.sleep(1)
 
 # ──────────────────────────────────────────────
@@ -883,6 +885,197 @@ def worker(url, total_views):
         except: pass
 
 # ──────────────────────────────────────────────
+# PARALLEL WORKER ORCHESTRATOR
+# ──────────────────────────────────────────────
+mp_ctx = multiprocessing.get_context("spawn")
+
+def _worker_process(url, worker_id, result_queue):
+    """Run one worker in its own process with dedicated display."""
+    display_num = 99 + worker_id
+    vnc_port = 5900 + worker_id
+    os.environ["DISPLAY"] = f":{display_num}"
+    os.environ["VNC_PORT"] = str(vnc_port)
+    try:
+        p = make_driver()
+        try:
+            ok = run_view(p, url)
+        finally:
+            try: p.quit()
+            except: pass
+    except Exception as e:
+        print(f"  [Worker {worker_id}] Error: {e}", flush=True)
+        ok = False
+    result_queue.put((worker_id, url, ok))
+
+def orchestrate_parallel(urls, windows, views, rotate, no_vnc):
+    """Parallel orchestrator: sessions → rotate IP → start all workers → summary."""
+    workers = []
+    wid = 0
+    for ui, u in enumerate(urls):
+        for _ in range(windows[ui] if ui < len(windows) else 1):
+            workers.append({"id": wid, "url": u, "label": f"URL{ui+1}.{wid+1}"})
+            wid += 1
+
+    if not workers:
+        print("  No workers defined.", flush=True)
+        return False
+
+    print(f"\n  Parallel workers: {len(workers)}", flush=True)
+    for w in workers:
+        ip_info = f"Display :{99 + w['id']}" + (f"  VNC :{5900 + w['id']}" if not no_vnc else "")
+        print(f"    [{w['label']}] {w['url'][:60]}  ({ip_info})", flush=True)
+
+    for session in range(views):
+        print(f"\n{'='*60}", flush=True)
+        print(f"  Session {session+1}/{views}  |  {len(workers)} workers  |  "
+              f"{'with IP rotation' if rotate else 'no IP rotation'}", flush=True)
+        print(f"{'='*60}", flush=True)
+
+        if rotate:
+            print(f"\n  Rotating IP before session {session+1}...", flush=True)
+            ip_ok = rotate_ip()
+            time.sleep(2)
+            current_ip = check_ip()
+            print(f"  Global IP: {current_ip or 'unknown'}", flush=True)
+
+        rq = mp_ctx.Queue()
+        procs = []
+        for w in workers:
+            p = mp_ctx.Process(target=_worker_process, args=(w["url"], w["id"], rq))
+            p.start()
+            procs.append(p)
+            print(f"  [Started] Worker {w['id']} ({w['label']}) — Display :{99 + w['id']}", flush=True)
+
+        for p in procs:
+            p.join()
+
+        results = []
+        while not rq.empty():
+            results.append(rq.get())
+
+        successes = sum(1 for r in results if r[2])
+        total = len(results)
+        rate = (successes * 100 // total) if total else 0
+
+        print(f"\n  {'='*40}", flush=True)
+        print(f"  Session {session+1} Summary", flush=True)
+        print(f"  {'='*40}", flush=True)
+        for r in sorted(results, key=lambda x: x[0]):
+            status = "[✓] SUCCESS" if r[2] else "[✗] FAILED"
+            print(f"    Worker {r[0]}: {status}", flush=True)
+        print(f"  {'='*40}", flush=True)
+        print(f"  Result: {successes}/{total} succeeded  ({rate}%)", flush=True)
+
+        if successes > 0:
+            print(f"  {'='*40}", flush=True)
+            print(f"  ALL SESSIONS COMPLETE", flush=True)
+            return True
+
+    print(f"\n  All sessions exhausted — no successful views.", flush=True)
+    return False
+
+def interactive_parallel():
+    """Interactive prompt for parallel mode."""
+    print()
+    print("  ╔══════════════════════════════════════╗")
+    print("  ║     ppccli — Parallel Mode           ║")
+    print("  ║   Multi-window parallel orchestrator  ║")
+    print("  ╚══════════════════════════════════════╝")
+    print()
+
+    urls = []
+    windows = []
+
+    def add_url(net_name, net_example):
+        url = ""
+        while not url.strip():
+            url = input(f"  {net_name} URL (e.g. {net_example}) [blank to skip]: ").strip()
+            if not url:
+                return None
+        win_str = input(f"  Windows for this URL (default: 1): ").strip()
+        try:
+            win = int(win_str) if win_str else 1
+        except ValueError:
+            win = 1
+        urls.append(url)
+        windows.append(win)
+        return url
+
+    print("  Enter URLs for each network (blank line to skip):")
+    print()
+    add_url("VPLINK/AroLinks", "https://arolinks.com/zREqi")
+    add_url("LinkPays", "https://savepe.in/XXXXX")
+    add_url("Custom", "https://example.com/ppc-link")
+
+    while True:
+        more = input("  Add another URL? (y/N): ").strip().lower()
+        if more not in ("y", "yes"):
+            break
+        url = ""
+        while not url.strip():
+            url = input("  URL: ").strip()
+        win_str = input(f"  Windows for this URL (default: 1): ").strip()
+        try:
+            win = int(win_str) if win_str else 1
+        except ValueError:
+            win = 1
+        urls.append(url)
+        windows.append(win)
+
+    if not urls:
+        print("  No URLs provided. Exiting.", flush=True)
+        sys.exit(0)
+
+    print()
+    views_str = input("  Total view sessions (default: 1): ").strip()
+    try:
+        views = int(views_str) if views_str else 1
+    except ValueError:
+        views = 1
+    print()
+
+    rotate_str = input("  Rotate IP between sessions? (y/N): ").strip().lower()
+    if rotate_str in ("y", "yes"):
+        os.environ.pop("ROTATE_IP", None)
+        rotate = True
+    else:
+        os.environ["ROTATE_IP"] = "0"
+        rotate = False
+    print()
+
+    vnc_str = input("  Start VNC servers? (y/N): ").strip().lower()
+    if vnc_str in ("y", "yes"):
+        os.environ.pop("NO_VNC", None)
+        no_vnc = False
+    else:
+        os.environ["NO_VNC"] = "1"
+        no_vnc = True
+    print()
+
+    ref = input("  YouTube referrer URL (optional): ").strip()
+    if ref:
+        os.environ["REFERRER_URL"] = ref
+
+    total_workers = sum(windows)
+    print()
+    print(f"  URLs:     {len(urls)}")
+    for i, u in enumerate(urls):
+        print(f"    URL{i+1}: {u[:64]}  ({windows[i]} window{'s' if windows[i] > 1 else ''})")
+    print(f"  Workers:  {total_workers}")
+    print(f"  Sessions: {views}")
+    print(f"  Rotate:   {'yes' if rotate else 'no'}")
+    print(f"  VNC:      {'yes' if not no_vnc else 'no'}")
+    print(f"  Referrer: {ref or '(none)'}")
+    print()
+
+    confirm = input("  Start? (Y/n): ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        sys.exit(0)
+
+    return urls, windows, views, rotate, no_vnc
+
+# ──────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────
 def interactive_prompt():
@@ -894,6 +1087,12 @@ def interactive_prompt():
     print("  ╚══════════════════════════════════════╝")
     print()
 
+    mode = input("  Mode: (s)ingle or (p)arallel? [s]: ").strip().lower()
+    if mode in ("p", "parallel"):
+        urls, windows, views, rotate, no_vnc = interactive_parallel()
+        return urls, windows, views, rotate, no_vnc, True
+
+    print()
     print("  Network:")
     print("     1 → VPLINK / AroLinks (hittracks → krishitalk)")
     print("     2 → LinkPays (savepe.in / rank1st.in)")
@@ -950,14 +1149,16 @@ def interactive_prompt():
         print("  Cancelled.")
         sys.exit(0)
 
-    return url, views
+    return url, views, 1, True, True, False  # url, views, windows_per_url, rotate, no_vnc, is_parallel
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="ppccli — Universal PPC page flow navigator")
-    parser.add_argument("url", nargs="?", help="PPC URL (e.g. https://vplink.in/MGIt8)")
+    parser.add_argument("url", nargs="*", help="PPC URL(s) (e.g. https://vplink.in/MGIt8)")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode (ask questions)")
-    parser.add_argument("-n", "--views", type=int, default=1, help="Number of views (default: 1)")
+    parser.add_argument("-p", "--parallel", action="store_true", help="Parallel mode (multi-window)")
+    parser.add_argument("-n", "--views", type=int, default=1, help="Number of views/sessions (default: 1)")
+    parser.add_argument("-w", "--windows", type=int, default=1, help="Windows per URL in parallel mode (default: 1)")
     parser.add_argument("--no-rotate", action="store_true", help="Skip IP rotation")
     parser.add_argument("--no-vnc", action="store_true", help="Skip VNC server startup")
     parser.add_argument("-r", "--referrer", help="YouTube referrer URL")
@@ -967,16 +1168,33 @@ def main():
         os.environ["NO_VNC"] = "1"
 
     if args.interactive or not args.url:
-        url, views = interactive_prompt()
+        result = interactive_prompt()
+        if result[-1]:  # is_parallel flag
+            urls, windows, views, rotate, no_vnc, _ = result
+            rotate = rotate if not args.no_rotate else False
+            orchestrate_parallel(urls, windows, views, rotate, no_vnc)
+        else:
+            url, views, _, _, _, _ = result
+            if args.referrer:
+                os.environ["REFERRER_URL"] = args.referrer
+            worker(url, views)
     else:
-        url = args.url
-        views = args.views
-        if args.referrer:
-            os.environ["REFERRER_URL"] = args.referrer
-        if args.no_rotate:
-            os.environ["ROTATE_IP"] = "0"
-
-    worker(url, views)
+        if args.parallel:
+            urls = args.url
+            windows = [args.windows] * len(urls)
+            rotate = not args.no_rotate
+            no_vnc = args.no_vnc
+            if args.referrer:
+                os.environ["REFERRER_URL"] = args.referrer
+            orchestrate_parallel(urls, windows, args.views, rotate, no_vnc)
+        else:
+            url = args.url[0]
+            views = args.views
+            if args.referrer:
+                os.environ["REFERRER_URL"] = args.referrer
+            if args.no_rotate:
+                os.environ["ROTATE_IP"] = "0"
+            worker(url, views)
 
 if __name__ == "__main__":
     main()

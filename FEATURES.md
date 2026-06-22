@@ -6,8 +6,9 @@
 
 - **Universal PPC support**: VPLINK (`hittracks` → `krishitalk` → `vplink` → destination), AroLinks (`arolinks.com`, same hittracks cycle), LinkPays (`savepe.in`, `rank1st.in`, `roadtaxcalculator`, `bookyourhotel`), and other PPC/shortener networks — auto-detected from URL domain
 - **Single-file script** (`ppccli.py`) — zero dependencies beyond Selenium + Chromium
-- **Two modes**: interactive CLI (`-i` / no args) or one-liner (`ppccli URL -n 10 -r "https://..."`)
+- **Three modes**: single (one URL, one Chrome), parallel (`-p` / `--parallel`), interactive CLI (`-i` / no args)
 - **Symlinked CLI command** at `/usr/local/bin/ppccli` → instantly picks up repo edits
+- **Parallel mode**: multi-window, multi-URL, multi-session orchestrator with session summary
 
 ## Navigation Flow
 
@@ -68,6 +69,18 @@
 - **Multi-tab destination scan**: checks every open tab for non-PPC destination (body > 50 chars)
 - **`reset_driver()`**: clears localStorage, sessionStorage, cookies, cache; navigates to about:blank
 
+## Parallel Mode
+
+- **`-p` / `--parallel` flag** — enables multi-window parallel execution
+- **Interactive parallel prompt** (`ppccli -i` → choose "p"): enter URLs for VPLINK/AroLinks, LinkPays, Custom + unlimited extras
+- **CLI parallel** (`ppccli -p URL1 URL2 URL3 -w 2`): each URL gets `-w` windows
+- **Each worker gets its own display** (`:99`, `:100`, `:101`, ...) with independent Xvfb
+- **Each worker gets its own VNC port** (`5900`, `5901`, `5902`, ...) when VNC enabled
+- **Session-based**: IP rotates once before each session, then ALL workers start simultaneously
+- **Session summary**: after every session, shows success/fail per worker + percentage
+- **Early exit**: if any worker succeeds in a session, the orchestrator stops
+- **All-session retry**: if all workers fail in a session, rotates IP and retries up to `-n` sessions
+
 ## Display
 
 - **Xvfb auto-start** on `:99` (1366×900×24) — auto-restarts on crash
@@ -77,13 +90,15 @@
 ## Configuration
 
 | CLI flag | Interactive Q | Default | Purpose |
-|---|---|---|---|
+|---|---|---|---|---|
 | `-i` | (auto if no URL) | — | Interactive mode |
-| `-n N` | Number of views | 1 | Total views |
+| `-p` | (s)ingle or (p)arallel | single | Parallel multi-window mode |
+| `-n N` | Number of views/sessions | 1 | Total views (single) or sessions (parallel) |
+| `-w N` | Windows per URL | 1 | Chrome instances per URL in parallel mode |
 | `--no-rotate` | Rotate IP? | No | Skip IP rotation |
 | `-r URL` | YouTube referrer? | None | Referrer for navigation |
-| `--no-vnc` | Start VNC? | Yes (VNC on) | Skip VNC server |
-| `URL` | VPLINK URL | (required) | Target PPC link |
+| `--no-vnc` | Start VNC? | No | Skip VNC server(s) |
+| `URL` | PPC URL(s) | (required) | Target PPC link(s) |
 
 ## Destination Detection
 
