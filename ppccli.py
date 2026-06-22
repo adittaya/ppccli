@@ -534,11 +534,13 @@ def exec_ppc_action(p, a, ex_domains):
                     cu_pop = safe_url(p)
                     if cu_pop and "about:blank" not in cu_pop:
                         cd_pop = urlparse(cu_pop).netloc
-                        if cd_pop and not any(x in cd_pop for x in ex_domains):
-                            return True, cu_pop
+                        if cd_pop:
+                            if not any(x in cd_pop for x in ex_domains):
+                                return True, cu_pop
+                            # PPC-domain in new tab — adopt it as current tab
+                            global MAIN_HANDLE
+                            MAIN_HANDLE = p.current_window_handle
                         break
-            except: pass
-            try: p.switch_to.window(p.window_handles[0])
             except: pass
         cu_post = safe_url(p)
         cd_post = urlparse(cu_post).netloc
@@ -935,6 +937,11 @@ def run_view(p, url):
         if not url_changed:
             found, dest = find_dest_in_page(p, ex_domains)
             if found:
+                return True
+            # PPC-domain article page with no indicators/actions — treat as final destination
+            if cd and any(x in cd for x in PPC_DOMAINS) and not actions and txt.strip() and \
+               not any(ind in txt.lower() for ind in PPC_INDICATORS):
+                print(f"  Destination (PPC article): {cu[:80]}", flush=True)
                 return True
 
     # After hop loop exhausted
