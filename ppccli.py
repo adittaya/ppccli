@@ -110,8 +110,14 @@ def ensure_display():
         return
     r = subprocess.run(f"fuser {vnc_port}/tcp &>/dev/null", shell=True)
     if r.returncode != 0:
-        subprocess.run(f"x11vnc -display :{display_num} -forever -shared -rfbport {vnc_port} -nopw -quiet -bg &>/dev/null", shell=True)
-        time.sleep(1)
+        vnc_log = f"/tmp/x11vnc_{display_num}.log"
+        subprocess.run(f"x11vnc -display :{display_num} -forever -shared -rfbport {vnc_port} -nopw -quiet -bg >{vnc_log} 2>&1", shell=True)
+        time.sleep(2)
+        alive = subprocess.run(f"fuser {vnc_port}/tcp &>/dev/null", shell=True).returncode == 0
+        if not alive:
+            print(f"  [VNC] x11vnc failed to start — check {vnc_log}", flush=True)
+            subprocess.run(f"x11vnc -display :{display_num} -forever -shared -rfbport {vnc_port} -nopw -bg >{vnc_log} 2>&1", shell=True)
+            time.sleep(2)
 
 # ──────────────────────────────────────────────
 # FINGERPRINT
