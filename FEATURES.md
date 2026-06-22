@@ -12,6 +12,7 @@
 
 ## Navigation Flow
 
+- **Domain-chain navigation**: PPC_CHAIN defines expected next domains per network — `scroll_continue` first tries finding a link to the next chain domain, avoiding generic "Continue" article links
 - **10 action types**: `verify`, `click_ads`, `unlock`, `timer`, `get_link`, `scroll_continue`, `click_image`, `step2`, `not_interested`, `telegram` — parsed from page text each hop
 - **45-hop max loop** per view — aborts earlier if destination found
 - **Gateway handler**: clicks "Continue to Next" on entry pages (first 3 hops)
