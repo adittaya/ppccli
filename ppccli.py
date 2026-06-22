@@ -648,23 +648,16 @@ def rotate_ip():
         except: pass
         return False
 
-    for attempt in range(1, 4):
-        print(f"  [IP] Toggle attempt {attempt}/3", flush=True)
-        print("  [IP] Airplane ON", flush=True)
-        if not _md():
-            print("  [IP] Airplane ON signal failed", flush=True)
-            time.sleep(3)
-            continue
-        time.sleep(8)
-        print("  [IP] Airplane OFF", flush=True)
-        if not _md():
-            print("  [IP] Airplane OFF signal failed", flush=True)
-            time.sleep(3)
-            continue
-        if _check_network(timeout=25):
-            print("  [IP] Network OK", flush=True)
-            break
-        print("  [IP] Network still down — retrying toggle...", flush=True)
+    # Ensure clean cycle: OFF → ON → OFF guarantees a real toggle
+    print("  [IP] Airplane OFF (reset)", flush=True)
+    _md()
+    time.sleep(3)
+    print("  [IP] Airplane ON", flush=True)
+    _md()
+    time.sleep(8)
+    print("  [IP] Airplane OFF", flush=True)
+    _md()
+    _check_network(timeout=25)
 
     new_ip = check_ip() or "unknown"
     changed = new_ip != old_ip and old_ip != "unknown" and new_ip != "unknown"
