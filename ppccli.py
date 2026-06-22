@@ -78,7 +78,7 @@ NUKE_JS = r"""
 })();
 """
 
-PPC_INDICATORS = ["get link","download","verify","unlock","i'm not robot","not robot",
+PPC_INDICATORS = ["get link","download","verify","unlock","i'm not robot","not robot","gate link",
                   "please wait","scroll down","continue","next",
                   "link is generating","step 2/3","click any image"]
 
@@ -368,6 +368,11 @@ def click_skip(p):
 
 def find_dest_in_page(p, ex_domains, force=False):
     try:
+        cu = safe_url(p)
+        cd = urlparse(cu).netloc
+        # Skip auto-redirect on known PPC domains — let the hop loop handle them
+        if not force and any(x in cd for x in PPC_DOMAINS):
+            return False, None
         txt = (p.execute_script("return document.body.innerText||''") or "").lower()
         if not force and any(ind in txt for ind in PPC_INDICATORS):
             return False, None
@@ -420,7 +425,7 @@ def parse_ppc_actions(txt):
         actions.append("timer")
     if "telegram" in t:
         actions.append("telegram")
-    if "get link" in t or "download" in t or "your link is almost ready" in t:
+    if "get link" in t or "download" in t or "your link is almost ready" in t or "gate link" in t:
         actions.append("get_link")
     if not actions:
         if "continue" in t or "next" in t:
@@ -479,7 +484,7 @@ def exec_ppc_action(p, a, ex_domains):
         scroll_incremental(p, 10)
         time.sleep(1)
         n_wh = len(p.window_handles)
-        for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here"]:
+        for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here","Gate Link"]:
             if click_any_native(p, t) or click_any(p, t, bottom_up=True):
                 break
         time.sleep(3)
@@ -832,7 +837,7 @@ def run_view(p, url):
                     break
                 if gl_clicked:
                     break
-                for t in ["Get Link","get link","Download","download","Destination Link"]:
+                for t in ["Get Link","get link","Download","download","Destination Link","Gate Link"]:
                     if click_any(p, t):
                         gl_clicked = True
                         time.sleep(3)
