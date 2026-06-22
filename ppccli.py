@@ -1,0 +1,957 @@
+#!/usr/bin/env python3
+"""
+ppccli — Universal PPC page flow navigator.
+Handles: hittracks.in.net → krishitalk.com → vplink.in → destination (VPLINK),
+and other PPC networks. Single-process, quality-focused, final version.
+"""
+import os, sys, time, re, random, subprocess, threading, urllib.request
+from urllib.parse import urlparse
+from collections import OrderedDict
+
+os.environ.setdefault("DISPLAY", ":99")
+
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.by import By
+except ImportError:
+    print("Run: pip install selenium")
+    sys.exit(1)
+
+DISPLAY_NUM = int(os.environ.get("DISPLAY", ":99").lstrip(":"))
+VNC_PORT = int(os.environ.get("VNC_PORT", "5900"))
+
+VPLINK_DOMAINS = ["hittracks.", "krishitalk.", "vplink.", "adsterra.", "trafficbalance."]
+EX_DOMAINS = VPLINK_DOMAINS + [
+    "about:blank", "msc", "doubleclick", "google", "facebook", "instagram",
+    "youtube", "chrome-error", "chromewebdata"
+]
+SOCIAL_DOMAINS = ["wa.me", "api.whatsapp.com", "facebook.com/share", "twitter.com/intent",
+                  "x.com/intent", "linkedin.com/share", "t.me", "telegram.me"]
+
+ANDROID_VERSIONS = ["10","11","12","12.1","13","14","15"]
+DEVICE_MODELS = [
+    "Pixel 7","Pixel 7 Pro","Pixel 8","Pixel 8 Pro","Pixel 9",
+    "SM-S908B","SM-S928B","SM-A536E","SM-A546E","SM-A156E",
+    "moto g(7) power","moto g(8) plus","moto g(9) play",
+    "OnePlus 12","OnePlus 11","OnePlus 10 Pro","OnePlus Nord 4",
+    "Xiaomi 14","Xiaomi 13T","Redmi Note 13 Pro","Redmi Note 12",
+    "Pixel 6","Pixel 6 Pro","SM-F946B","SM-F936B","SM-F721B",
+    "moto g73 5G","moto g54 5G","moto g84 5G","OnePlus 10R",
+    "OnePlus Nord CE 3","Xiaomi 12","Xiaomi 12T Pro","Redmi Note 11",
+    "Redmi Note 10","POCO X5 Pro","POCO F5","vivo V29","vivo Y100",
+    "Oppo Reno 10","Oppo F23","Realme 11 Pro","Realme Narzo 60",
+]
+ROTATE_LOCK = "/tmp/ppccli_ip_rotate"
+MAIN_HANDLE = None
+
+# Clean stale lock from crashed runs
+try:
+    st = os.stat(ROTATE_LOCK)
+    if time.time() - st.st_mtime > 300:
+        os.rmdir(ROTATE_LOCK)
+except (FileNotFoundError, OSError): pass
+
+NUKE_JS = r"""
+(function(){
+  document.querySelectorAll('*').forEach(function(e){
+    var p=getComputedStyle(e).position;
+    var z=parseInt(getComputedStyle(e).zIndex)||0;
+    if((p==='fixed'||p==='sticky')&&z>1000)e.remove();
+    if(z>9999)e.remove();
+  });
+  document.body.style.overflow='auto';
+  document.body.style.position='static';
+  document.documentElement.style.overflow='auto';
+})();
+"""
+
+PPC_INDICATORS = ["get link","download","verify","unlock","i'm not robot","not robot",
+                  "please wait","scroll down","continue","next",
+                  "link is generating","step 2/3","click any image"]
+
+# ──────────────────────────────────────────────
+# DISPLAY
+# ──────────────────────────────────────────────
+def ensure_display():
+    no_vnc = os.environ.get("NO_VNC", "").lower() in ("1","true","yes")
+    if not no_vnc:
+        vnc_alive = subprocess.run(f"fuser {VNC_PORT}/tcp &>/dev/null", shell=True).returncode == 0
+        if vnc_alive:
+            return
+    lock = f"/tmp/.X{DISPLAY_NUM}-lock"
+    restart = False
+    if os.path.exists(lock):
+        try:
+            subprocess.run(["xdpyinfo","-display",f":{DISPLAY_NUM}"], capture_output=True, timeout=3)
+        except:
+            os.remove(lock)
+            restart = True
+    if restart or not os.path.exists(lock):
+        subprocess.run(f"pkill -9 -f 'Xvfb :{DISPLAY_NUM}' 2>/dev/null", shell=True)
+        time.sleep(0.5)
+        subprocess.run(f"Xvfb :{DISPLAY_NUM} -screen 0 1366x900x24 &>/dev/null &", shell=True)
+        time.sleep(2)
+    if no_vnc:
+        return
+    r = subprocess.run(f"fuser {VNC_PORT}/tcp &>/dev/null", shell=True)
+    if r.returncode != 0:
+        subprocess.run(f"x11vnc -display :{DISPLAY_NUM} -forever -shared -rfbport {VNC_PORT} -nopw -quiet -bg &>/dev/null", shell=True)
+        time.sleep(1)
+
+# ──────────────────────────────────────────────
+# FINGERPRINT
+# ──────────────────────────────────────────────
+def random_ua():
+    av = random.choice(ANDROID_VERSIONS)
+    dv = random.choice(DEVICE_MODELS)
+    cv = f"{random.randint(120,127)}.0.{random.randint(6000,6600)}.{random.randint(64,250)}"
+    return f"Mozilla/5.0 (Linux; Android {av}; {dv}) AppleWebKit/534.36 (KHTML, like Gecko) Chrome/{cv} Mobile Safari/534.36"
+
+def make_driver():
+    time.sleep(random.uniform(2, 7))
+    ensure_display()
+    vw = 390 + random.randint(-30, 30)
+    vh = 844 + random.randint(-30, 30)
+    profile_dir = f"/tmp/ppccli_{random.randint(10000,99999)}"
+    ua = random_ua()
+    hw_cores = random.choice([2,4,6,8])
+    dev_mem = random.choice([1,2,4,6,8])
+    webgl_vendor = random.choice(["Qualcomm","Google","ARM","MediaTek","Samsung",
+                                   "Apple","Intel"])
+    webgl_renderer = random.choice([
+        "Adreno (TM) 640","Adreno (TM) 730","Adreno (TM) 740","Adreno (TM) 750",
+        "Mali-G76 MP4","Mali-G77 MP5","Mali-G78 MP14","Mali-G610 MP4",
+        "Mali-G68 MP4","PowerVR GM9446","PowerVR GE8320","Adreno (TM) 660",
+    ])
+    tz = random.choice([-300,-360,-420,-480,-540,-600,60,120,180,240,330,345,420,480,540,570,660,720])
+    o = Options()
+    o.binary_location = "/usr/bin/chromium"
+    o.add_argument("--no-sandbox")
+    o.add_argument("--disable-dev-shm-usage")
+    o.add_argument("--test-type")
+    o.add_argument("--disable-gpu")
+    o.add_argument("--disable-software-rasterizer")
+    o.add_argument("--disable-extensions")
+    o.add_argument("--disable-background-networking")
+    o.add_argument("--disable-background-timer-throttling")
+    o.add_argument("--disable-renderer-backgrounding")
+    o.add_argument("--disable-backgrounding-occluded-windows")
+    o.add_argument("--memory-pressure-off")
+    o.add_argument("--aggressive-cache-discard")
+    o.add_argument("--disk-cache-size=1")
+    o.add_argument(f"--window-size={vw},{vh}")
+    o.add_argument("--disable-blink-features=AutomationControlled")
+    o.add_argument(f"--user-agent={ua}")
+    o.add_argument(f"--user-data-dir={profile_dir}")
+    win_x = os.environ.get("WIN_X")
+    win_y = os.environ.get("WIN_Y")
+    if win_x and win_y:
+        o.add_argument(f"--window-position={win_x},{win_y}")
+    o.add_experimental_option("excludeSwitches", ["enable-automation"])
+    o.add_experimental_option("useAutomationExtension", False)
+    o.page_load_strategy = "none"
+    for attempt in range(5):
+        try:
+            d = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=o)
+            break
+        except Exception as e:
+            if attempt < 4:
+                ensure_display()
+                time.sleep(3 + attempt * 3)
+            else:
+                raise e
+    d.set_page_load_timeout(8)
+    d.set_script_timeout(6)
+    d.implicitly_wait(3)
+    vw_adj = vw + random.randint(-5, 5)
+    vh_adj = vh + random.randint(-5, 5)
+    scale = random.choice([2.0, 2.5, 2.75, 3.0, 3.5])
+    d.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+        "mobile": True, "width": vw_adj, "height": vh_adj,
+        "deviceScaleFactor": scale, "screenOrientation": {"type": "portraitPrimary", "angle": 0},
+        "touch": True,
+    })
+    d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
+        Object.defineProperty(navigator,'webdriver',{{get:()=>undefined}});
+        Object.defineProperty(navigator,'plugins',{{get:()=>[1,2,3,4,5]}});
+        Object.defineProperty(navigator,'languages',{{get:()=>['en-US','en']}});
+        Object.defineProperty(navigator,'hardwareConcurrency',{{get:()=>{hw_cores}}});
+        Object.defineProperty(navigator,'deviceMemory',{{get:()=>{dev_mem}}});
+        Object.defineProperty(navigator,'platform',{{get:()=>'Linux armv81'}});
+        window.chrome = {{runtime:{{}}}};
+        var origTR = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(){{
+            var c = origTR.apply(this,arguments);
+            if(c.length>100){{
+                var i = {random.randint(0,99)};
+                c = c.substring(0,i) + '{random.choice(["x","y","z","w","q"])}' + c.substring(i+1);
+            }}
+            return c;
+        }};
+        var origGL = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(){{
+            var ctx = origGL.apply(this,arguments);
+            if(ctx && ctx.getParameter){{
+                var _gp = ctx.getParameter.bind(ctx);
+                ctx.getParameter = function(p){{
+                    if(p===37445) return '{webgl_vendor}';
+                    if(p===37446) return '{webgl_renderer}';
+                    return _gp(p);
+                }};
+            }}
+            return ctx;
+        }};
+        var _getTz = Date.prototype.getTimezoneOffset;
+        Date.prototype.getTimezoneOffset = function(){{ return {tz}; }};
+    """})
+    return d
+
+# ──────────────────────────────────────────────
+# PAGE HELPERS
+# ──────────────────────────────────────────────
+def dismiss_dialogs(p):
+    try:
+        try: alert = p.switch_to.alert; alert.dismiss(); time.sleep(0.5)
+        except: pass
+        p.execute_script("window.alert=function(){};window.confirm=function(){return true;};window.prompt=function(){return'';}")
+    except: pass
+
+def safe_url(p):
+    try: return p.execute_script("return window.location.href") or ""
+    except: return ""
+
+def nuke_overlays(p):
+    dismiss_dialogs(p)
+    try:
+        p.execute_script(NUKE_JS); time.sleep(0.2)
+        p.execute_script("""
+            document.querySelectorAll('[class*="close"],[aria-label*="Close"],[id*="close"],[class*="dismiss"],[aria-label*="Dismiss"]').forEach(function(e){
+                if(e.offsetWidth>0&&e.offsetHeight>0){try{e.click()}catch(e){}}});
+            document.querySelectorAll('*').forEach(function(e){
+                if(e.offsetWidth>0&&e.offsetHeight>0&&(e.innerText=='\u00d7'||e.innerText=='\u2715')){try{e.click()}catch(e){}}});
+        """)
+        time.sleep(0.2)
+    except: pass
+
+def switch_main(p):
+    if MAIN_HANDLE:
+        try: p.switch_to.window(MAIN_HANDLE)
+        except: pass
+
+def close_extra_tabs(p):
+    try:
+        for wh in p.window_handles:
+            if wh != MAIN_HANDLE:
+                try: p.switch_to.window(wh); p.close()
+                except: pass
+                switch_main(p)
+    except: pass
+
+def reset_driver(p):
+    try:
+        for wh in p.window_handles:
+            try: p.switch_to.window(wh); p.execute_script("localStorage.clear(); sessionStorage.clear();")
+            except: pass
+        while len(p.window_handles) > 1:
+            p.switch_to.window(p.window_handles[-1]); p.close()
+        p.switch_to.window(p.window_handles[0])
+        p.execute_cdp_cmd("Network.clearBrowserCookies", {})
+        p.execute_cdp_cmd("Network.clearBrowserCache", {})
+        p.execute_script("window.location.href='about:blank'")
+        time.sleep(1)
+        return True
+    except:
+        return False
+
+def scroll_incremental(p, steps=8):
+    for i in range(steps):
+        try: p.execute_script(f"window.scrollBy(0, document.body.scrollHeight/{steps});")
+        except: break
+        time.sleep(0.2)
+    try: p.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    except: pass
+    time.sleep(0.5)
+
+def check_tab_dest(p, ex_domains):
+    try:
+        cu = safe_url(p)
+        if cu:
+            cd = urlparse(cu).netloc
+            if cd and not any(x in cd for x in ex_domains):
+                body = (p.execute_script("return (document.body.innerText||'').trim().length") or 0)
+                if body > 50:
+                    return True, cu
+    except: pass
+    return False, None
+
+# ──────────────────────────────────────────────
+# CLICK HELPERS
+# ──────────────────────────────────────────────
+def click_any(p, txt, bottom_up=False):
+    try:
+        sq = txt.replace("'", "\\'")
+        return p.execute_script(f"""
+            var terms = ['{sq}'];
+            var lower_terms = terms.map(function(t){{return t.toLowerCase();}});
+            var sel = 'button, a, input, span, div[role="button"], [class*="button"], [class*="btn"], [id*="continue"], [class*="continue"]';
+            var els = document.querySelectorAll(sel);
+            var start = {'els.length-1' if bottom_up else '0'};
+            var end = {'-1' if bottom_up else 'els.length'};
+            var step = {'-1' if bottom_up else '1'};
+            for(var i=start;i{'!=' if bottom_up else '<'}end;i+=step){{var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){{var t=(e.innerText||e.value||'').toLowerCase();for(var j=0;j<lower_terms.length;j++){{if(t.indexOf(lower_terms[j])!=-1){{e.scrollIntoView({{block:'center',behavior:'instant'}});e.click();setTimeout(function(){{e.click();}},100);setTimeout(function(){{e.click();}},200);return true;}}}}}}}}
+            var all = document.querySelectorAll('*');
+            for(var i=start;i{'!=' if bottom_up else '<'}end;i+=step){{var e=all[i];if(e.offsetWidth>0&&e.offsetHeight>0){{var t=(e.innerText||'').toLowerCase();if(t.indexOf(lower_terms[0])!=-1&&(e.tagName=='BUTTON'||e.tagName=='A'||e.tagName=='INPUT'||e.getAttribute('role')=='button')){{e.scrollIntoView({{block:'center',behavior:'instant'}});e.click();setTimeout(function(){{e.click();}},100);setTimeout(function(){{e.click();}},200);return true;}}}}}}
+            return false;
+        """)
+    except: return False
+
+def click_any_native(p, txt):
+    try:
+        terms = [txt.lower(), txt.upper(), txt]
+        sel = "button, a, input, span, [role='button'], [class*='button'], [class*='btn']"
+        for el in p.find_elements(By.CSS_SELECTOR, sel):
+            if not el.is_displayed(): continue
+            et = (el.text or "").lower()
+            for term in terms:
+                if et and term.lower() in et:
+                    try: p.execute_script("arguments[0].scrollIntoView({block:'center',behavior:'instant'});", el)
+                    except: pass
+                    el.click()
+                    return True
+        return False
+    except:
+        return False
+
+def click_any_image(p):
+    try:
+        return p.execute_script("""
+            var imgs = document.querySelectorAll('img');
+            for(var i=0;i<imgs.length;i++){var img=imgs[i];if(img.offsetWidth>40&&img.offsetHeight>40){var src=(img.src||'').toLowerCase();if(src.indexOf('logo')!=-1)continue;var parent=img.closest('a');img.scrollIntoView({block:'center',behavior:'instant'});if(parent)parent.click();else img.click();return true;}}
+            return false;
+        """)
+    except: return False
+
+def click_skip(p):
+    for t in ["Skip","skip","SKIP","Dismiss","dismiss","Not granted","not granted","No thanks","Close"]:
+        try:
+            sq = t.replace("'", "\\'")
+            r = p.execute_script(f"""
+                var terms = ['{sq}'];
+                var all = document.querySelectorAll('button, a, input, [role="button"], [class*="skip"], [class*="dismiss"], [aria-label*="Skip"]');
+                for(var i=0;i<all.length;i++){{var e=all[i];if(e.offsetWidth>0&&e.offsetHeight>0){{var txt=(e.innerText||e.value||e.getAttribute('aria-label')||'').toLowerCase();for(var j=0;j<terms.length;j++){{if(txt.indexOf(terms[j].toLowerCase())!=-1){{e.scrollIntoView({{block:'center'}});e.click();return '{sq}';}}}}}}}}
+                return '';
+            """)
+            if r: time.sleep(1); return True
+        except: pass
+    return False
+
+def find_dest_in_page(p, ex_domains, force=False):
+    try:
+        txt = (p.execute_script("return document.body.innerText||''") or "").lower()
+        if not force and any(ind in txt for ind in PPC_INDICATORS):
+            return False, None
+        links = p.execute_script("""
+            var results = [];
+            var els = document.querySelectorAll('a[href]');
+            for(var i=0;i<els.length;i++){
+                var href = els[i].href || '';
+                if(href && href.indexOf('javascript')!==0){
+                    results.push({href: href, text: (els[i].innerText||'').trim(), visible: els[i].offsetWidth>0&&els[i].offsetHeight>0});
+                }
+            }
+            return results;
+        """) or []
+        for link in links:
+            href = link.get("href", "")
+            cd = urlparse(href).netloc
+            if cd and not any(x in cd for x in ex_domains + SOCIAL_DOMAINS):
+                safe_href = href.replace("'", "\\'")
+                p.execute_script(f"window.location.href='{safe_href}'")
+                time.sleep(3)
+                return True, href
+    except: pass
+    return False, None
+
+# ──────────────────────────────────────────────
+# VPLINK-SPECIFIC FLOW HANDLERS
+# ──────────────────────────────────────────────
+def parse_vplink_actions(txt):
+    t = txt.lower()
+    actions = []
+    if "not interested" in t or "not grant" in t:
+        actions.append("not_interested")
+    if "step 2/3" in t or "step 2 of 3" in t:
+        actions.append("step2")
+    if "click any image" in t:
+        actions.append("click_image")
+    if "scroll down" in t and "continue" in t:
+        actions.append("scroll_continue")
+    if "verify" in t and any(x in t for x in [" click", " button", " now", " to ", "your", "destination"]):
+        actions.append("verify")
+    if "click below" in t or "click ads" in t:
+        actions.append("click_ads")
+    if "i'm not robot" in t or "unlock" in t or "not robot" in t:
+        actions.append("unlock")
+    if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
+       re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I):
+        actions.append("timer")
+    if "telegram" in t:
+        actions.append("telegram")
+    if "get link" in t or "download" in t:
+        actions.append("get_link")
+    if not actions:
+        if "continue" in t or "next" in t:
+            actions.append("continue_generic")
+    actions = list(OrderedDict.fromkeys(actions))
+    return actions
+
+def exec_vplink_action(p, a, ex_domains):
+    if a == "not_interested":
+        for t in ["Continue","continue","CONTINUE","OK","Okay"]:
+            if click_any(p, t): break
+        time.sleep(1)
+        close_extra_tabs(p)
+        return False, None
+
+    if a == "step2":
+        txt = (p.execute_script("return document.body.innerText||''") or "").lower()
+        if "click any image" in txt:
+            time.sleep(14)
+        for t in ["Verify","verify","VERIFY","click to verify"]:
+            if click_any(p, t): time.sleep(2); break
+        return False, None
+
+    if a == "scroll_continue":
+        scroll_incremental(p, 15)
+        try:
+            p.execute_script("""
+                var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
+                for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
+                return false;
+            """)
+        except: pass
+        time.sleep(2)
+        return False, None
+
+    if a == "click_image":
+        click_any_image(p); time.sleep(1)
+        return False, None
+
+    if a == "verify":
+        scroll_incremental(p, 8)
+        for t in ["Verify","verify","VERIFY","click to verify"]:
+            if click_any(p, t): time.sleep(1); break
+        scroll_incremental(p, 5)
+        for t in ["Continue","continue","CONTINUE"]:
+            if click_any(p, t):
+                time.sleep(2)
+                break
+        return False, None
+
+    if a == "click_ads":
+        click_any_image(p); time.sleep(1)
+        return False, None
+
+    if a == "get_link":
+        scroll_incremental(p, 10)
+        time.sleep(1)
+        n_wh = len(p.window_handles)
+        for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here"]:
+            if click_any_native(p, t) or click_any(p, t, bottom_up=True):
+                break
+        time.sleep(3)
+        if len(p.window_handles) > n_wh:
+            try:
+                p.switch_to.window(p.window_handles[-1])
+                for _ in range(10):
+                    time.sleep(1)
+                    cu_pop = safe_url(p)
+                    if cu_pop and "about:blank" not in cu_pop:
+                        cd_pop = urlparse(cu_pop).netloc
+                        if cd_pop and not any(x in cd_pop for x in ex_domains):
+                            return True, cu_pop
+                        break
+            except: pass
+            try: p.switch_to.window(p.window_handles[0])
+            except: pass
+        cu_post = safe_url(p)
+        cd_post = urlparse(cu_post).netloc
+        if cd_post and not any(x in cd_post for x in ex_domains):
+            return True, cu_post
+        hrefs = p.execute_script("""
+            var els = document.querySelectorAll('a[href]');
+            for(var i=els.length-1;i>=0;i--){
+                var e=els[i];
+                if(e.offsetWidth>0&&e.offsetHeight>0){
+                    var t=(e.innerText||'').toLowerCase();
+                    if(t.indexOf('get link')!=-1||t.indexOf('download')!=-1){
+                        return e.href;
+                    }
+                }
+            }
+            return '';
+        """) or ""
+        if hrefs and 'javascript' not in hrefs:
+            cd_href = urlparse(hrefs).netloc
+            if cd_href and not any(x in cd_href for x in ex_domains):
+                p.get(hrefs)
+                time.sleep(5)
+                return True, hrefs
+        return False, None
+
+    if a == "telegram":
+        n_wh = len(p.window_handles)
+        for t in ["Telegram","telegram","Join Our"]:
+            if click_any(p, t): time.sleep(3); break
+        if len(p.window_handles) > n_wh:
+            try:
+                p.switch_to.window(p.window_handles[-1])
+                time.sleep(3)
+            except: pass
+        return False, None
+
+    if a == "unlock":
+        for t in ["I'M Not Robot","Not Robot","Unlock","IM","I'M"]:
+            if click_any(p, t): time.sleep(2); break
+        return False, None
+
+    if a == "continue_generic":
+        for t in ["Continue","continue","CONTINUE","Next","next","NEXT"]:
+            if click_any(p, t):
+                time.sleep(2); break
+        return False, None
+
+    if a == "timer":
+        txt = (p.execute_script("return document.body.innerText||''") or "").lower()
+        m = re.search(r'wait\s*(\d+)\s*(sec|second)', txt, re.I)
+        if not m:
+            m = re.search(r'(\d+)\s*(sec|second)\s*(link|generating|remaining)', txt, re.I)
+        sec = int(m.group(1)) if m else 12
+        for i in range(0, sec + 3, 2):
+            time.sleep(2)
+            try:
+                body = (p.execute_script("return document.body.innerText||''") or "").lower()
+                if "get link" in body or "download" in body:
+                    break
+            except: pass
+        return False, None
+
+    return False, None
+
+# ──────────────────────────────────────────────
+# GOOG_REWARDED HANDLER
+# ──────────────────────────────────────────────
+def handle_goog_rewarded(p):
+    nuke_overlays(p); click_skip(p); time.sleep(1)
+    nuke_overlays(p); click_skip(p); time.sleep(1)
+    for _ in range(6):
+        scroll_incremental(p, 5)
+        try:
+            done = p.execute_script("""
+                function tryClick(doc){
+                    var sel = doc.querySelectorAll('button, a, [class*="continue"], [id*="continue"], [class*="skip"], [class*="dismiss"], [class*="close"]');
+                    for(var i=0;i<sel.length;i++){var e=sel[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1||t.indexOf('SKIP')!=-1||t.indexOf('DISMISS')!=-1||t.indexOf('CLOSE')!=-1||t.indexOf('NOT INTERESTED')!=-1||t.indexOf('NO THANKS')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();return true;}}}
+                    return false;
+                }
+                if(tryClick(document))return true;
+                var ifs = document.querySelectorAll('iframe');
+                for(var i=0;i<ifs.length;i++){try{if(ifs[i].contentDocument&&tryClick(ifs[i].contentDocument))return true;}catch(e){}}
+                return false;
+            """)
+        except:
+            done = False
+        if done:
+            break
+        time.sleep(2.5)
+
+# ──────────────────────────────────────────────
+# IP ROTATION
+# ──────────────────────────────────────────────
+def check_ip():
+    try:
+        resp = urllib.request.urlopen("https://ipinfo.io/ip", timeout=8)
+        ip = resp.read().decode().strip()
+        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip): return ip
+    except: pass
+    return None
+
+def rotate_ip():
+    macrodroid = ["http://127.0.0.1:8080/rotate_ip", "http://100.91.72.157:8080/rotate_ip"]
+    def _md():
+        for u in macrodroid:
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(u, method="GET"), timeout=5)
+                if r.status == 200: return True
+            except: pass
+        return False
+    try:
+        os.mkdir(ROTATE_LOCK)
+        primary = True
+    except FileExistsError:
+        primary = False
+    if not primary:
+        print("  [IP] Waiting for another process to finish rotation...", flush=True)
+        for _ in range(20):
+            time.sleep(2)
+            try:
+                urllib.request.urlopen("https://ipinfo.io/ip", timeout=5)
+                print("  [IP] Network OK (secondary)", flush=True)
+                new_ip = check_ip() or "unknown"
+                print(f"  [IP] New: {new_ip}", flush=True)
+                return True
+            except: pass
+        print("  [IP] Secondary wait timed out", flush=True)
+        return False
+    old_ip = check_ip() or "unknown"
+    print(f"  [IP] Current: {old_ip}", flush=True)
+    if not _md():
+        print("  [IP] MacroDroid unreachable", flush=True)
+        try: os.rmdir(ROTATE_LOCK)
+        except: pass
+        return False
+    print("  [IP] Airplane ON", flush=True)
+    time.sleep(10)
+    if not _md():
+        print("  [IP] Airplane OFF failed", flush=True)
+    else:
+        print("  [IP] Airplane OFF", flush=True)
+    for _ in range(20):
+        time.sleep(2)
+        try:
+            urllib.request.urlopen("https://ipinfo.io/ip", timeout=5)
+            print("  [IP] Network OK", flush=True); break
+        except: pass
+    new_ip = check_ip() or "unknown"
+    changed = new_ip != old_ip and old_ip != "unknown" and new_ip != "unknown"
+    print(f"  [IP] New: {new_ip} | Changed: {'YES' if changed else 'NO'}", flush=True)
+    try: os.rmdir(ROTATE_LOCK)
+    except: pass
+    return changed
+
+# ──────────────────────────────────────────────
+# CORE FLOW
+# ──────────────────────────────────────────────
+def run_view(p, url):
+    global MAIN_HANDLE
+    MAIN_HANDLE = None
+    p.execute_cdp_cmd("Network.clearBrowserCookies", {})
+    p.execute_cdp_cmd("Network.clearBrowserCache", {})
+    try: p.execute_script("localStorage.clear(); sessionStorage.clear();")
+    except: pass
+    ref = os.environ.get("REFERRER_URL", "")
+    if ref:
+        p.execute_cdp_cmd("Page.navigate", {"url": url, "referrer": ref})
+        time.sleep(2)
+    else:
+        p.get(url)
+    time.sleep(4)
+    MAIN_HANDLE = p.current_window_handle
+
+    ex_domains = EX_DOMAINS[:]
+    same_url_count = 0
+    last_url = None
+    err_count = 0
+    stuck_count = 0
+    for hop in range(45):
+        time.sleep(0.5)
+        switch_main(p)
+        dismiss_dialogs(p)
+        nuke_overlays(p)
+
+        # Check all tabs for destination
+        found = False
+        for wh in p.window_handles:
+            try:
+                p.switch_to.window(wh); time.sleep(0.3)
+                f, d = check_tab_dest(p, ex_domains)
+                if f:
+                    return True
+            except: pass
+        switch_main(p)
+
+        cu = safe_url(p)
+        cd = urlparse(cu).netloc
+        print(f"  Hop {hop+1}: {cu[:80]}", flush=True)
+
+        # Chrome-error abort
+        if "chrome-error" in cu or "chromewebdata" in cd:
+            err_count += 1
+            if err_count >= 3:
+                print("  [Abort] Chrome error 3x — skipping", flush=True)
+                return False
+        else:
+            err_count = 0
+
+        # Skip excluded domains (no action parsing)
+        if cd and not any(x in cd for x in ex_domains):
+            try:
+                txt_check = (p.execute_script("return document.body.innerText||''") or "").lower()
+                if any(ind in txt_check for ind in PPC_INDICATORS):
+                    ex_domains.append(cd)
+                    continue
+            except: pass
+            print(f"  Destination: {cu[:100]}", flush=True)
+            return True
+
+        # Same URL tracking
+        if cu == last_url:
+            same_url_count += 1
+        else:
+            same_url_count = 0
+            stuck_count = 0
+        last_url = cu
+
+        # Stuck handler
+        if same_url_count >= 8:
+            stuck_count += 1
+            if stuck_count >= 3:
+                print("  [Abort] Page stuck 3x — skipping", flush=True)
+                return False
+            nuke_overlays(p)
+            scroll_incremental(p, 15)
+            for t in ["Get Link","get link","Download","download","Get Destination Link","Destination Link"]:
+                if click_any(p, t): time.sleep(3); break
+            cd_stuck = urlparse(cu).netloc
+            if cd_stuck and not any(x in cd_stuck for x in ex_domains):
+                found, dest = find_dest_in_page(p, ex_domains, force=True)
+                if found:
+                    return True
+
+        nuke_overlays(p)
+
+        # Gateway handler
+        if hop < 3:
+            gw_found = False
+            for t in ["Continue to Next", "continue to next", "CONTINUE TO NEXT", "Continue", "continue", "CONTINUE"]:
+                if click_any(p, t):
+                    time.sleep(2)
+                    gw_found = True
+                    break
+            if gw_found:
+                switch_main(p); time.sleep(1)
+                continue
+
+        # Google interstitial
+        cu_frag = urlparse(cu).fragment
+        if "#goog_rewarded" in cu or "#google_vignette" in cu or cu_frag == "go" or cu_frag.startswith("go/"):
+            handle_goog_rewarded(p)
+            switch_main(p)
+            cu = safe_url(p); cd = urlparse(cu).netloc
+            if cd and not any(x in cd for x in ex_domains):
+                return True
+            continue
+
+        # Ad pages
+        if any(x in cd for x in ["msc", "doubleclick", "google"]):
+            for t in ["Accept All","Continue","I Agree","Got it","Allow","OK"]:
+                if click_any(p, t): time.sleep(1)
+            time.sleep(3)
+            close_extra_tabs(p)
+            continue
+
+        # Read page and parse actions
+        txt = ""
+        for _ in range(5):
+            try:
+                txt = p.execute_script("return document.body.innerText||''") or ""
+                if txt.strip(): break
+            except: pass
+            time.sleep(1)
+        print(f"  Text: {txt[:120].replace(chr(10),' ')}", flush=True)
+        actions = parse_vplink_actions(txt)
+        print(f"  Actions: {actions}", flush=True)
+
+        for a in actions:
+            prev_url = safe_url(p)
+            dest_found, dest_url = exec_vplink_action(p, a, ex_domains)
+            time.sleep(0.5)
+
+            if dest_found:
+                return True
+
+            # Check all tabs for destination
+            for wh in p.window_handles:
+                try:
+                    p.switch_to.window(wh); time.sleep(0.3)
+                    f, d = check_tab_dest(p, ex_domains)
+                    if f:
+                        return True
+                except: pass
+            switch_main(p)
+            close_extra_tabs(p)
+
+            cu2 = safe_url(p)
+            cd2 = urlparse(cu2).netloc
+            if cd2 and not any(x in cd2 for x in ex_domains):
+                print(f"  Destination: {cu2[:80]}", flush=True)
+                return True
+            if cu2 and cu2 != prev_url:
+                print(f"  URL changed: {cu2[:60]}", flush=True)
+                break
+
+        # Post-action Get Link check
+        if "get_link" not in actions:
+            gl_clicked = False
+            for _ in range(3):
+                time.sleep(1)
+                for wh in p.window_handles:
+                    try:
+                        p.switch_to.window(wh)
+                        f, d = check_tab_dest(p, ex_domains)
+                        if f:
+                            return True
+                    except: pass
+                switch_main(p)
+                cu2 = safe_url(p)
+                if cu2 != cu:
+                    break
+                if gl_clicked:
+                    break
+                for t in ["Get Link","get link","Download","download","Destination Link"]:
+                    if click_any(p, t):
+                        gl_clicked = True
+                        time.sleep(3)
+                        break
+
+        # Fallback DOM scan
+        found, dest = find_dest_in_page(p, ex_domains)
+        if found:
+            return True
+
+    # After hop loop exhausted
+    switch_main(p); time.sleep(1)
+    cu = safe_url(p)
+    cd = urlparse(cu).netloc
+    if cd and not any(x in cd for x in ex_domains):
+        return True
+    return False
+
+# ──────────────────────────────────────────────
+# WORKER
+# ──────────────────────────────────────────────
+def worker(url, total_views):
+    rotate = os.environ.get("ROTATE_IP", "").lower() not in ("0","off","false","no")
+    p = make_driver()
+    try:
+        for v in range(total_views):
+            print(f"\n{'='*50}\n  View {v+1}/{total_views}\n{'='*50}", flush=True)
+            ip_rotated = False
+            if rotate:
+                ip_rotated = rotate_ip()
+                if not ip_rotated:
+                    print("  [IP] Rotation FAILED — continuing with same IP", flush=True)
+                time.sleep(1)
+            ip = check_ip()
+            print(f"  IP: {ip or 'unknown'}", flush=True)
+            if not reset_driver(p):
+                try: p.quit()
+                except: pass
+                p = make_driver()
+            ok = run_view(p, url)
+            if not ok:
+                print(f"  [Retry] Restarting view {v+1}...", flush=True)
+                if rotate and not ip_rotated:
+                    if not rotate_ip():
+                        print("  [IP] Rotation FAILED on retry", flush=True)
+                    time.sleep(1)
+                ip = check_ip()
+                if not reset_driver(p):
+                    try: p.quit()
+                    except: pass
+                    p = make_driver()
+                ok = run_view(p, url)
+            print(f"  {'[✓] SUCCESS' if ok else '[✗] FAILED'}", flush=True)
+    finally:
+        try: p.quit()
+        except: pass
+
+# ──────────────────────────────────────────────
+# CLI
+# ──────────────────────────────────────────────
+def interactive_prompt():
+    """Interactive CLI mode — asks questions step by step."""
+    print()
+    print("  ╔══════════════════════════════════════╗")
+    print("  ║           ppccli — Interactive        ║")
+    print("  ║     Universal PPC Page Navigator      ║")
+    print("  ╚══════════════════════════════════════╝")
+    print()
+
+    url = ""
+    while not url.strip():
+        url = input("  PPC URL (e.g. https://vplink.in/MGIt8): ").strip()
+        if not url:
+            print("  URL is required.")
+    print()
+
+    views_str = input("  Number of views (default: 1): ").strip()
+    try:
+        views = int(views_str) if views_str else 1
+    except ValueError:
+        print(f"  Invalid number, using 1.")
+        views = 1
+    print()
+
+    rotate_str = input("  Rotate IP between views? (y/N): ").strip().lower()
+    if rotate_str in ("y", "yes"):
+        os.environ.pop("ROTATE_IP", None)
+    else:
+        os.environ["ROTATE_IP"] = "0"
+    print()
+
+    vnc_str = input("  Start VNC server? (y/N): ").strip().lower()
+    if vnc_str in ("y", "yes"):
+        os.environ.pop("NO_VNC", None)
+    else:
+        os.environ["NO_VNC"] = "1"
+    print()
+
+    ref = input("  YouTube referrer URL (optional): ").strip()
+    if ref:
+        os.environ["REFERRER_URL"] = ref
+
+    print()
+    print(f"  URL:      {url}")
+    print(f"  Views:    {views}")
+    print(f"  Rotate:   {'yes' if rotate_str in ('y','yes') else 'no'}")
+    print(f"  VNC:      {'yes' if vnc_str in ('y','yes') else 'no'}")
+    print(f"  Referrer: {ref or '(none)'}")
+    print()
+
+    confirm = input("  Start? (Y/n): ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        sys.exit(0)
+
+    return url, views
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="ppccli — Universal PPC page flow navigator")
+    parser.add_argument("url", nargs="?", help="PPC URL (e.g. https://vplink.in/MGIt8)")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode (ask questions)")
+    parser.add_argument("-n", "--views", type=int, default=1, help="Number of views (default: 1)")
+    parser.add_argument("--no-rotate", action="store_true", help="Skip IP rotation")
+    parser.add_argument("--no-vnc", action="store_true", help="Skip VNC server startup")
+    parser.add_argument("-r", "--referrer", help="YouTube referrer URL")
+    args = parser.parse_args()
+
+    if args.no_vnc:
+        os.environ["NO_VNC"] = "1"
+
+    if args.interactive or not args.url:
+        url, views = interactive_prompt()
+    else:
+        url = args.url
+        views = args.views
+        if args.referrer:
+            os.environ["REFERRER_URL"] = args.referrer
+        if args.no_rotate:
+            os.environ["ROTATE_IP"] = "0"
+
+    worker(url, views)
+
+if __name__ == "__main__":
+    main()
