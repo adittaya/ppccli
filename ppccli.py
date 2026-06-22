@@ -863,6 +863,7 @@ def run_view(p, url):
         print(f"  Text: {txt[:120].replace(chr(10),' ')}", flush=True)
         actions = parse_ppc_actions(txt)
         print(f"  Actions: {actions}", flush=True)
+        url_changed = False
 
         for a in actions:
             prev_url = safe_url(p)
@@ -903,6 +904,9 @@ def run_view(p, url):
                         return True
                 break
 
+        # If URL changed during actions, skip fallback DOM scan — let next hop process the new page
+        url_changed = safe_url(p) != cu
+
         # Post-action Get Link check
         if "get_link" not in actions:
             gl_clicked = False
@@ -927,10 +931,11 @@ def run_view(p, url):
                         time.sleep(3)
                         break
 
-        # Fallback DOM scan
-        found, dest = find_dest_in_page(p, ex_domains)
-        if found:
-            return True
+        # Fallback DOM scan — skip when URL changed (let next hop process the new page)
+        if not url_changed:
+            found, dest = find_dest_in_page(p, ex_domains)
+            if found:
+                return True
 
     # After hop loop exhausted
     switch_main(p); time.sleep(1)
