@@ -907,11 +907,12 @@ def _worker_process(url, worker_id, result_queue):
         ok = False
     result_queue.put((worker_id, url, ok))
 
-def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc):
+def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_parallel=False):
     """Parallel orchestrator: sessions → rotate IP → start all workers → summary.
     
     Workers marked same_ip=True are launched together in one session on one IP.
     Workers marked same_ip=False each get their own session with IP rotation.
+    When all_parallel=True, ALL workers go into ONE batch session regardless.
     """
     # Build worker groups: (same_ip, url, id) tuples
     wid = 0
@@ -927,6 +928,13 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc):
         else:
             for w in batch:
                 groups.append([w])
+
+    # all_parallel: merge ALL workers into one single batch session
+    if all_parallel and len(groups) > 1:
+        merged = []
+        for g in groups:
+            merged.extend(g)
+        groups = [merged]
 
     all_workers = [w for g in groups for w in g]
     if not all_workers:
@@ -1079,6 +1087,14 @@ def interactive_parallel():
         no_vnc = True
     print()
 
+    allp_str = input("  Run ALL workers in one batch session (single IP)? (Y/n): ").strip().lower()
+    all_parallel = allp_str not in ("n", "no")
+    if all_parallel:
+        print("    → All workers will run simultaneously in one session.")
+    else:
+        print("    → Workers grouped by URL and same-IP setting.")
+    print()
+
     ref = input("  YouTube referrer URL (optional): ").strip()
     if ref:
         os.environ["REFERRER_URL"] = ref
@@ -1093,6 +1109,7 @@ def interactive_parallel():
     print(f"  Sessions: {views}")
     print(f"  Rotate:   {'yes' if rotate else 'no'}")
     print(f"  VNC:      {'yes' if not no_vnc else 'no'}")
+    print(f"  All batch: {'yes' if all_parallel else 'no'}")
     print(f"  Referrer: {ref or '(none)'}")
     print()
 
@@ -1101,7 +1118,7 @@ def interactive_parallel():
         print("  Cancelled.")
         sys.exit(0)
 
-    return urls, windows, same_ips, views, rotate, no_vnc
+    return urls, windows, same_ips, views, rotate, no_vnc, all_parallel
 
 # ──────────────────────────────────────────────
 # CLI
@@ -1117,8 +1134,8 @@ def interactive_prompt():
 
     mode = input("  Mode: (s)ingle or (p)arallel? [s]: ").strip().lower()
     if mode in ("p", "parallel"):
-        urls, windows, same_ips, views, rotate, no_vnc = interactive_parallel()
-        return urls, windows, same_ips, views, rotate, no_vnc, True
+        urls, windows, same_ips, views, rotate, no_vnc, all_parallel = interactive_parallel()
+        return urls, windows, same_ips, views, rotate, no_vnc, all_parallel, True
 
     print()
     print("  Network:")
@@ -1190,6 +1207,7 @@ def main():
     parser.add_argument("--no-rotate", action="store_true", help="Skip IP rotation")
     parser.add_argument("--same-ip", action="store_true", default=True, dest="same_ip", help="All windows share same IP (default)")
     parser.add_argument("--no-same-ip", action="store_false", dest="same_ip", help="Each window gets separate IP session")
+    parser.add_argument("--all-parallel", action="store_true", help="All workers in one batch session (single IP)")
     parser.add_argument("--no-vnc", action="store_true", help="Skip VNC server startup")
     parser.add_argument("-r", "--referrer", help="YouTube referrer URL")
     args = parser.parse_args()
@@ -1200,9 +1218,9 @@ def main():
     if args.interactive or not args.url:
         result = interactive_prompt()
         if result[-1]:  # is_parallel flag
-            urls, windows, same_ips, views, rotate, no_vnc, _ = result
+            urls, windows, same_ips, views, rotate, no_vnc, all_parallel, _ = result
             rotate = rotate if not args.no_rotate else False
-            orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc)
+            orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_parallel)
         else:
             url, views, _, _, _, _ = result
             if args.referrer:
@@ -1215,9 +1233,10 @@ def main():
             same_ips = [args.same_ip] * len(urls)
             rotate = not args.no_rotate
             no_vnc = args.no_vnc
+            all_parallel = args.all_parallel
             if args.referrer:
                 os.environ["REFERRER_URL"] = args.referrer
-            orchestrate_parallel(urls, windows, same_ips, args.views, rotate, no_vnc)
+            orchestrate_parallel(urls, windows, same_ips, args.views, rotate, no_vnc, all_parallel)
         else:
             url = args.url[0]
             views = args.views
