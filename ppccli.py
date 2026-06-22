@@ -448,7 +448,7 @@ def exec_ppc_action(p, a, ex_domains):
         try:
             p.execute_script("""
                 var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
-                for(var i=0;i<els.length;i++){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
+                for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
                 return false;
             """)
         except: pass
@@ -837,6 +837,17 @@ def run_view(p, url):
                 return True
             if cu2 and cu2 != prev_url:
                 print(f"  URL changed: {cu2[:60]}", flush=True)
+                # If still on same PPC domain after Continue, try more Continue clicks
+                if cd2 and any(x in cd2 for x in PPC_DOMAINS) and a == "scroll_continue":
+                    for t2 in ["Gate Link","Get Link","Click Here","Proceed","Download","Destination Link","Continue","continue","CONTINUE"]:
+                        if click_any(p, t2):
+                            time.sleep(3)
+                            break
+                    cu3 = safe_url(p)
+                    cd3 = urlparse(cu3).netloc
+                    if cd3 and not any(x in cd3 for x in ex_domains):
+                        print(f"  Destination: {cu3[:80]}", flush=True)
+                        return True
                 break
 
         # Post-action Get Link check
