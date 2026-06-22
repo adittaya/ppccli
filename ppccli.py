@@ -648,16 +648,17 @@ def rotate_ip():
         except: pass
         return False
 
-    # Ensure clean cycle: OFF → ON → OFF guarantees a real toggle
-    print("  [IP] Airplane OFF (reset)", flush=True)
-    _md()
-    time.sleep(3)
-    print("  [IP] Airplane ON", flush=True)
-    _md()
-    time.sleep(8)
-    print("  [IP] Airplane OFF", flush=True)
-    _md()
-    _check_network(timeout=25)
+    # Toggle: Airplane ON → OFF → check network
+    for _ in range(2):
+        print("  [IP] Airplane ON", flush=True)
+        _md()
+        time.sleep(8)
+        print("  [IP] Airplane OFF", flush=True)
+        _md()
+        if _check_network(timeout=25):
+            print("  [IP] Network OK", flush=True)
+            break
+        print("  [IP] Network down — toggling once more...", flush=True)
 
     new_ip = check_ip() or "unknown"
     changed = new_ip != old_ip and old_ip != "unknown" and new_ip != "unknown"
