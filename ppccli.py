@@ -614,6 +614,14 @@ def rotate_ip():
                 if r.status == 200: return True
             except: pass
         return False
+    def _check_network(timeout=30):
+        for _ in range(0, timeout, 2):
+            time.sleep(2)
+            try:
+                urllib.request.urlopen("https://ipinfo.io/ip", timeout=5)
+                return True
+            except: pass
+        return False
     try:
         os.mkdir(ROTATE_LOCK)
         primary = True
@@ -639,18 +647,25 @@ def rotate_ip():
         try: os.rmdir(ROTATE_LOCK)
         except: pass
         return False
-    print("  [IP] Airplane ON", flush=True)
-    time.sleep(10)
-    if not _md():
-        print("  [IP] Airplane OFF failed", flush=True)
-    else:
+
+    for attempt in range(1, 4):
+        print(f"  [IP] Toggle attempt {attempt}/3", flush=True)
+        print("  [IP] Airplane ON", flush=True)
+        if not _md():
+            print("  [IP] Airplane ON signal failed", flush=True)
+            time.sleep(3)
+            continue
+        time.sleep(8)
         print("  [IP] Airplane OFF", flush=True)
-    for _ in range(20):
-        time.sleep(2)
-        try:
-            urllib.request.urlopen("https://ipinfo.io/ip", timeout=5)
-            print("  [IP] Network OK", flush=True); break
-        except: pass
+        if not _md():
+            print("  [IP] Airplane OFF signal failed", flush=True)
+            time.sleep(3)
+            continue
+        if _check_network(timeout=25):
+            print("  [IP] Network OK", flush=True)
+            break
+        print("  [IP] Network still down — retrying toggle...", flush=True)
+
     new_ip = check_ip() or "unknown"
     changed = new_ip != old_ip and old_ip != "unknown" and new_ip != "unknown"
     print(f"  [IP] New: {new_ip} | Changed: {'YES' if changed else 'NO'}", flush=True)
