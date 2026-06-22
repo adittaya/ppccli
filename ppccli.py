@@ -574,7 +574,7 @@ def exec_ppc_action(p, a, ex_domains):
 def handle_goog_rewarded(p):
     nuke_overlays(p); click_skip(p); time.sleep(1)
     nuke_overlays(p); click_skip(p); time.sleep(1)
-    for _ in range(6):
+    for _ in range(4):
         scroll_incremental(p, 5)
         try:
             done = p.execute_script("""
@@ -592,7 +592,15 @@ def handle_goog_rewarded(p):
             done = False
         if done:
             break
-        time.sleep(2.5)
+        time.sleep(2)
+    # Hard fallback: strip fragment and reload to escape google_vignette
+    switch_main(p)
+    cu = safe_url(p)
+    if "#google_vignette" in cu or "#goog_rewarded" in cu:
+        clean = cu.split("#")[0] if "#" in cu else cu
+        if clean:
+            try: p.get(clean); time.sleep(3)
+            except: pass
 
 # ──────────────────────────────────────────────
 # IP ROTATION
