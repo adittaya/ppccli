@@ -414,6 +414,11 @@ def parse_ppc_actions(txt):
         actions.append("not_interested")
     if "step 2/3" in t or "step 2 of 3" in t:
         actions.append("step2")
+    if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
+       re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I) or \
+       re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I) or \
+       "loading the best option" in t:
+        actions.append("timer")  # timer FIRST — prevents unlock from interrupting
     if "click any image" in t:
         actions.append("click_image")
     if "scroll down" in t and "continue" in t:
@@ -424,11 +429,6 @@ def parse_ppc_actions(txt):
         actions.append("click_ads")
     if "i'm not robot" in t or "unlock" in t or "not robot" in t:
         actions.append("unlock")
-    if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
-       re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I) or \
-       re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I) or \
-       "loading the best option" in t:
-        actions.append("timer")
     if "telegram" in t:
         actions.append("telegram")
     if "get link" in t or "download" in t or "your link is almost ready" in t or "gate link" in t:
@@ -797,6 +797,15 @@ def run_view(p, url):
                     return True
 
         nuke_overlays(p)
+
+        # Skip action parsing on dead-end pages — go straight to destination scan
+        cu_path = urlparse(cu).path.lower()
+        if any(x in cu_path for x in ["privacy", "disclaimer", "terms", "policy", "copyright"]):
+            found, dest = find_dest_in_page(p, ex_domains, force=True)
+            if found:
+                return True
+            print("  [Skip] Privacy/policy page — scanning for destination...", flush=True)
+            continue
 
         # Gateway handler
         if hop < 3:
