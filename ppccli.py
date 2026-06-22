@@ -272,11 +272,20 @@ def switch_main(p):
 
 def close_extra_tabs(p):
     try:
+        curr = p.current_window_handle
         for wh in p.window_handles:
-            if wh != MAIN_HANDLE:
-                try: p.switch_to.window(wh); p.close()
+            if wh != MAIN_HANDLE and wh != curr:
+                try:
+                    p.switch_to.window(wh)
+                    cu = safe_url(p) or ""
+                    # Keep about:blank tabs (still loading interstitial) and non-excluded destinations
+                    if "about:blank" not in cu:
+                        cd = urlparse(cu).netloc
+                        if cd and not any(x in cd for x in EX_DOMAINS):
+                            continue
+                        p.close()
                 except: pass
-                switch_main(p)
+        p.switch_to.window(curr)
     except: pass
 
 def reset_driver(p):
@@ -566,7 +575,7 @@ def exec_ppc_action(p, a, ex_domains):
         if len(p.window_handles) > n_wh:
             try:
                 p.switch_to.window(p.window_handles[-1])
-                for _ in range(10):
+                for _ in range(25):
                     time.sleep(1)
                     cu_pop = safe_url(p)
                     if cu_pop and "about:blank" not in cu_pop:
@@ -645,10 +654,16 @@ def exec_ppc_action(p, a, ex_domains):
 def handle_goog_rewarded(p):
     nuke_overlays(p); click_skip(p); time.sleep(1)
     nuke_overlays(p); click_skip(p); time.sleep(1)
-    for _ in range(4):
-        scroll_incremental(p, 5)
+    # Wait for interstitial ad to complete (up to 30s)
+    for s in range(30):
+        time.sleep(1)
+        cu = safe_url(p)
+        # Check if interstitial is gone (no goog_vignette/goog_rewarded in URL)
+        if "#google_vignette" not in cu and "#goog_rewarded" not in cu:
+            break
+        # Try to find and dismiss Continue/Skip/Close buttons inside the interstitial
         try:
-            done = p.execute_script("""
+            dismissed = p.execute_script("""
                 function tryClick(doc){
                     var sel = doc.querySelectorAll('button, a, [class*="continue"], [id*="continue"], [class*="skip"], [class*="dismiss"], [class*="close"]');
                     for(var i=0;i<sel.length;i++){var e=sel[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1||t.indexOf('SKIP')!=-1||t.indexOf('DISMISS')!=-1||t.indexOf('CLOSE')!=-1||t.indexOf('NOT INTERESTED')!=-1||t.indexOf('NO THANKS')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();return true;}}}
@@ -660,10 +675,21 @@ def handle_goog_rewarded(p):
                 return false;
             """)
         except:
-            done = False
-        if done:
+            dismissed = False
+        if dismissed:
             break
-        time.sleep(2)
+        # Check for new tabs (destination may open in background)
+        n_wh = len(p.window_handles)
+        if n_wh > 1:
+            try:
+                p.switch_to.window(p.window_handles[-1])
+                pop_url = safe_url(p)
+                if pop_url and "about:blank" not in pop_url:
+                    pop_cd = urlparse(pop_url).netloc
+                    if pop_cd and not any(x in pop_cd for x in EX_DOMAINS):
+                        return  # destination detected in new tab
+                p.switch_to.window(p.window_handles[0])
+            except: pass
     # Hard fallback: strip fragment and reload to escape google_vignette
     switch_main(p)
     cu = safe_url(p)
