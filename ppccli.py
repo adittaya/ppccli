@@ -769,11 +769,26 @@ def run_view(p, url):
         # Google interstitial
         cu_frag = urlparse(cu).fragment
         if "#goog_rewarded" in cu or "#google_vignette" in cu or cu_frag == "go" or cu_frag.startswith("go/"):
+            cu_before = safe_url(p).split("#")[0]
             handle_goog_rewarded(p)
             switch_main(p)
             cu = safe_url(p); cd = urlparse(cu).netloc
             if cd and not any(x in cd for x in ex_domains):
                 return True
+            # If still on same base URL after vignette, try Continue once more
+            if cu.split("#")[0] == cu_before:
+                for _ in range(3):
+                    for t in ["Continue", "continue", "CONTINUE", "Click Here", "Proceed", "Gate Link", "Get Link"]:
+                        if click_any(p, t):
+                            time.sleep(3)
+                            break
+                    cu2 = safe_url(p)
+                    if cu2.split("#")[0] != cu_before:
+                        break
+                    time.sleep(2)
+                cu = safe_url(p); cd = urlparse(cu).netloc
+                if cd and not any(x in cd for x in ex_domains):
+                    return True
             continue
 
         # Ad pages
