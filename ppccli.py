@@ -456,36 +456,37 @@ def exec_ppc_action(p, a, ex_domains):
 
     if a == "scroll_continue":
         scroll_incremental(p, 15)
-        # Try domain-chain navigation first: find a link to the next PPC domain
-        cu = safe_url(p)
-        cd = urlparse(cu).netloc
-        next_domains = []
+        cu = safe_url(p); cd = urlparse(cu).netloc
+        # Try domain-chain navigation: find a link to the next PPC domain
         for pcd, nxt in PPC_CHAIN.items():
             if pcd in cd:
-                next_domains = nxt
+                try:
+                    links = p.execute_script("""
+                        var results = []; var els = document.querySelectorAll('a[href]');
+                        for(var i=0;i<els.length;i++){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0&&e.href.indexOf('javascript')!==0){results.push(e.href);}}
+                        return results;
+                    """) or []
+                    for href in links:
+                        hn = urlparse(href).netloc
+                        if any(x in hn for x in nxt):
+                            try: p.get(href); time.sleep(3)
+                            except: pass
+                            return False, None
+                except: pass
                 break
-        if next_domains:
+        # Fallback: click Continue repeatedly until domain changes
+        for _ in range(5):
             try:
-                links = p.execute_script("""
-                    var results = []; var els = document.querySelectorAll('a[href]');
-                    for(var i=0;i<els.length;i++){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0&&e.href.indexOf('javascript')!==0){results.push(e.href);}}
-                    return results;
-                """) or []
-                for href in links:
-                    hn = urlparse(href).netloc
-                    if any(x in hn for x in next_domains):
-                        try: p.get(href); time.sleep(3); return False, None
-                        except: pass
+                p.execute_script("""
+                    var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
+                    for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
+                    return false;
+                """)
             except: pass
-        # Fallback: try clicking Continue elements as before
-        try:
-            p.execute_script("""
-                var els = document.querySelectorAll('button, a, input, [class*="continue"], [id*="continue"]');
-                for(var i=els.length-1;i>=0;i--){var e=els[i];if(e.offsetWidth>0&&e.offsetHeight>0){var t=(e.innerText||e.value||'').toUpperCase();if(t.indexOf('CONTINUE')!=-1){e.scrollIntoView({block:'center',behavior:'instant'});e.click();setTimeout(function(){e.click();},100);setTimeout(function(){e.click();},200);return true;}}}
-                return false;
-            """)
-        except: pass
-        time.sleep(2)
+            time.sleep(2)
+            cu2 = safe_url(p); cd2 = urlparse(cu2).netloc
+            if cd2 != cd:
+                break
         return False, None
 
     if a == "click_image":
