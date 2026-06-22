@@ -26,7 +26,7 @@ except ImportError:
 
 PPC_DOMAINS = [
     # LinkPays
-    "savepe.in", "rank1st.in", "roadtaxcalculator.", "roadtaxcalculatorr.",
+    "linkpays.", "savepe.in", "rank1st.in", "roadtaxcalculator.", "roadtaxcalculatorr.",
     "bookyourhotel.",
     # VPLINK / AroLinks
     "hittracks.", "krishitalk.", "vplink.", "arolinks.",
