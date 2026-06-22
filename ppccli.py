@@ -97,7 +97,7 @@ def ensure_display():
     restart = False
     if os.path.exists(lock):
         try:
-            subprocess.run(["xdpyinfo","-display",f":{display_num}"], capture_output=True, timeout=3)
+            subprocess.run(["xdpyinfo","-display",f":{display_num}"], capture_output=True, timeout=3, check=True)
         except:
             os.remove(lock)
             restart = True
