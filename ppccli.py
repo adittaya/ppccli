@@ -322,7 +322,7 @@ def check_tab_dest(p, ex_domains):
 def click_any(p, txt, bottom_up=False):
     try:
         sq = txt.replace("'", "\\'")
-        return p.execute_script(f"""
+        ok = p.execute_script(f"""
             var terms = ['{sq}'];
             var lower_terms = terms.map(function(t){{return t.toLowerCase();}});
             var sel = 'button, a, input, span, div[role="button"], [class*="button"], [class*="btn"], [id*="continue"], [class*="continue"]';
@@ -335,6 +335,10 @@ def click_any(p, txt, bottom_up=False):
             for(var i=start;i{'!=' if bottom_up else '<'}end;i+=step){{var e=all[i];if(e.offsetWidth>0&&e.offsetHeight>0){{var t=(e.innerText||'').toLowerCase();if(t.indexOf(lower_terms[0])!=-1&&(e.tagName=='BUTTON'||e.tagName=='A'||e.tagName=='INPUT'||e.getAttribute('role')=='button')){{e.scrollIntoView({{block:'center',behavior:'instant'}});e.click();setTimeout(function(){{e.click();}},100);setTimeout(function(){{e.click();}},200);return true;}}}}}}
             return false;
         """)
+        if ok:
+            return True
+        # Fallback: try known PPC template element IDs
+        return click_by_id(p, ALL_TP_IDS)
     except: return False
 
 def click_any_native(p, txt):
@@ -350,7 +354,8 @@ def click_any_native(p, txt):
                     except: pass
                     el.click()
                     return True
-        return False
+        # Fallback: try known PPC template element IDs
+        return click_by_id(p, ALL_TP_IDS)
     except:
         return False
 
@@ -362,6 +367,36 @@ def click_any_image(p):
             return false;
         """)
     except: return False
+
+# PPC template element IDs (from linkpays-bypass template)
+TP_IDS = {
+    "go": ["goBtn"],
+    "unlock": ["tp-unlock-btn"],
+    "verify": ["tp-verify"],
+    "continue": ["tp-snp2"],
+    "wait": ["tp-wait1"],
+}
+ALL_TP_IDS = list({eid for ids in TP_IDS.values() for eid in ids})
+
+def click_by_id(p, ids):
+    try:
+        for eid in ids:
+            ok = p.execute_script(f"""
+                var el = document.getElementById('{eid}');
+                if(el && el.offsetWidth>0 && el.offsetHeight>0){{
+                    el.scrollIntoView({{block:'center',behavior:'instant'}});
+                    el.click();
+                    return true;
+                }}
+                return false;
+            """)
+            if ok:
+                return True
+    except: pass
+    return False
+
+def delay(b=0.5, e=1.5):
+    time.sleep(b + random.random() * (e - b))
 
 def click_skip(p):
     for t in ["Skip","skip","SKIP","Dismiss","dismiss","Not granted","not granted","No thanks","Close"]:
@@ -375,7 +410,9 @@ def click_skip(p):
             """)
             if r: time.sleep(1); return True
         except: pass
-    return False
+    # Fallback: dismiss via known overlay close IDs
+    try: return click_by_id(p, ["tp-overlay-close", "tp-close", "closeBtn", "overlay-close"])
+    except: return False
 
 def find_dest_in_page(p, ex_domains, force=False):
     try:
@@ -727,6 +764,18 @@ def run_view(p, url):
         p.get(url)
     time.sleep(4)
     MAIN_HANDLE = p.current_window_handle
+    # Inject view-counter request tracker (injects into all frames)
+    p.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
+        window.__ppcView = null;
+        var _origOpen = XMLHttpRequest.prototype.open;
+        if(_origOpen){ XMLHttpRequest.prototype.open = function(method, url){
+            if(method&&method.toLowerCase()==='post'&&url&&url.indexOf('linkpays')!==-1){
+                window.__ppcView = url;
+                console.log('[ppc] View counter:', url);
+            }
+            return _origOpen.apply(this,arguments);
+        };}
+    """})
 
     ex_domains = EX_DOMAINS[:]
     same_url_count = 0
@@ -800,6 +849,17 @@ def run_view(p, url):
 
         nuke_overlays(p)
 
+        # Initial goBtn click on linkpays.in (first hop)
+        if hop == 0 and click_by_id(p, ["goBtn"]):
+            print("  [goBtn] Clicked — registering view...", flush=True)
+            time.sleep(5)
+            # Check if view counter request was tracked
+            view_hit = p.execute_script("return window.__ppcView || null;") or ""
+            if view_hit:
+                print(f"  [View] Counter confirmed: {view_hit[:60]}", flush=True)
+            else:
+                print("  [View] No explicit counter request detected (view may still count)", flush=True)
+
         # Skip action parsing on dead-end pages — go straight to destination scan
         cu_path = urlparse(cu).path.lower()
         if any(x in cu_path for x in ["privacy", "disclaimer", "terms", "policy", "copyright"]):
@@ -864,6 +924,26 @@ def run_view(p, url):
             time.sleep(1)
         print(f"  Text: {txt[:120].replace(chr(10),' ')}", flush=True)
         actions = parse_ppc_actions(txt)
+        # Supplement text-based detection with template element ID checks
+        if "timer" not in actions and "unlock" not in actions:
+            try:
+                ids_found = p.execute_script("""
+                    var ids = ['tp-unlock-btn','tp-verify','tp-snp2','goBtn','tp-wait1'];
+                    for(var i=0;i<ids.length;i++){var el=document.getElementById(ids[i]);if(el&&el.offsetWidth>0&&el.offsetHeight>0)return ids[i];}
+                    return '';
+                """) or ""
+                if ids_found == "tp-wait1" and "timer" not in actions:
+                    actions.append("timer")
+                if ids_found == "tp-unlock-btn" and "unlock" not in actions:
+                    actions.append("unlock")
+                if ids_found == "tp-verify" and "verify" not in actions:
+                    actions.append("verify")
+                if ids_found == "tp-snp2" and "scroll_continue" not in actions:
+                    actions.append("scroll_continue")
+                if ids_found == "goBtn" and "get_link" not in actions:
+                    actions.append("get_link")
+                actions = list(OrderedDict.fromkeys(actions))
+            except: pass
         print(f"  Actions: {actions}", flush=True)
         url_changed = False
 
