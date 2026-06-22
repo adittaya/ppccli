@@ -892,9 +892,18 @@ def interactive_prompt():
     print("  ╚══════════════════════════════════════╝")
     print()
 
+    print("  Network:")
+    print("     1 → VPLINK (hittracks → krishitalk → vplink.in)")
+    print("     2 → LinkPays (savepe.in / rank1st.in)")
+    print("     3 → Custom (any other PPC URL)")
+    net = input("  Your choice (1-3) [1]: ").strip() or "1"
+    print()
+
+    examples = {"1": "https://vplink.in/MGIt8", "2": "https://savepe.in/XXXXX", "3": "https://example.com/ppc-link"}
+    labels = {"1": "VPLINK", "2": "LinkPays", "3": "Custom"}
     url = ""
     while not url.strip():
-        url = input("  PPC URL (e.g. https://vplink.in/MGIt8): ").strip()
+        url = input(f"  {labels.get(net, 'PPC')} URL (e.g. {examples.get(net, 'https://...')}): ").strip()
         if not url:
             print("  URL is required.")
     print()
@@ -926,6 +935,7 @@ def interactive_prompt():
         os.environ["REFERRER_URL"] = ref
 
     print()
+    print(f"  Network:  {labels.get(net, 'Custom')}")
     print(f"  URL:      {url}")
     print(f"  Views:    {views}")
     print(f"  Rotate:   {'yes' if rotate_str in ('y','yes') else 'no'}")
