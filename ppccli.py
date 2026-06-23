@@ -6,7 +6,7 @@ AroLinks (arolinks.com, same hittracks cycle),
 LinkPays (savepe.in, rank1st.in, roadtaxcalculator, bookyourhotel),
 and other PPC networks. Single-process, quality-focused, final version.
 """
-import os, sys, time, re, random, subprocess, threading, multiprocessing, urllib.request
+import os, sys, time, re, random, subprocess, threading, multiprocessing, urllib.request, glob
 from urllib.parse import urlparse
 from collections import OrderedDict
 
@@ -67,6 +67,13 @@ DEVICE_MODELS = [
 ]
 ROTATE_LOCK = "/tmp/ppccli_ip_rotate"
 MAIN_HANDLE = None
+
+# Clean stale temp profiles and lock from crashed runs
+try:
+    for d in glob.glob("/tmp/ppccli_*"):
+        if os.path.isdir(d):
+            subprocess.run(f"rm -rf '{d}' 2>/dev/null", shell=True)
+except: pass
 
 # Clean stale lock from crashed runs
 try:
@@ -140,6 +147,11 @@ def random_ua():
     return f"Mozilla/5.0 (Linux; Android {av}; {dv}) AppleWebKit/534.36 (KHTML, like Gecko) Chrome/{cv} Mobile Safari/534.36"
 
 def make_driver():
+    # Kill zombie Chrome processes left from crashed sessions (only our temp profiles)
+    try:
+        for old_dir in glob.glob("/tmp/ppccli_*"):
+            subprocess.run(f"pkill -9 -f '{old_dir}' 2>/dev/null", shell=True)
+    except: pass
     time.sleep(random.uniform(1, 3))
     ensure_display()
     vw = 390 + random.randint(-30, 30)
@@ -161,6 +173,7 @@ def make_driver():
     o.add_argument("--no-sandbox")
     o.add_argument("--disable-dev-shm-usage")
     o.add_argument("--test-type")
+    o.add_argument("--headless=old")
     o.add_argument("--disable-gpu")
     o.add_argument("--disable-software-rasterizer")
     o.add_argument("--disable-extensions")
@@ -171,6 +184,8 @@ def make_driver():
     o.add_argument("--memory-pressure-off")
     o.add_argument("--aggressive-cache-discard")
     o.add_argument("--disk-cache-size=1")
+    o.add_argument("--js-flags=--max_old_space_size=256")
+    o.add_argument("--renderer-process-limit=1")
     o.add_argument("--disable-sync")
     o.add_argument("--disable-translate")
     o.add_argument("--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies,OptimizationGuideModelDownloading,OptimizationHintsFetching")
@@ -251,6 +266,17 @@ def make_driver():
         Date.prototype.getTimezoneOffset = function(){{ return {tz}; }};
     """})
     return d
+
+def cleanup_profile(p):
+    """Remove the temp Chrome profile directory for this driver."""
+    try:
+        profile = p.capabilities.get("chrome", {}).get("userDataDir", "")
+        if profile and profile.startswith("/tmp/ppccli_"):
+            try: p.quit()
+            except: pass
+            time.sleep(0.5)
+            subprocess.run(f"rm -rf '{profile}' 2>/dev/null", shell=True)
+    except: pass
 
 def safe_navigate(p, url, retries=3):
     for attempt in range(retries):
@@ -1215,8 +1241,7 @@ def worker(url, total_views):
             ip = check_ip()
             print(f"  IP: {ip or 'unknown'}", flush=True)
             if not reset_driver(p):
-                try: p.quit()
-                except: pass
+                cleanup_profile(p)
                 p = make_driver()
             ok, dest_url = run_view(p, url)
             if not ok:
@@ -1227,8 +1252,7 @@ def worker(url, total_views):
                     time.sleep(1)
                 ip = check_ip()
                 if not reset_driver(p):
-                    try: p.quit()
-                    except: pass
+                    cleanup_profile(p)
                     p = make_driver()
                 ok, dest_url = run_view(p, url)
             if ok and dest_url:
@@ -1236,8 +1260,7 @@ def worker(url, total_views):
             else:
                 print(f"  {'[✓] SUCCESS' if ok else '[✗] FAILED'}", flush=True)
     finally:
-        try: p.quit()
-        except: pass
+        cleanup_profile(p)
 
 # ──────────────────────────────────────────────
 # PARALLEL WORKER ORCHESTRATOR
@@ -1256,8 +1279,7 @@ def _worker_process(url, worker_id, result_queue):
         try:
             ok, dest_url = run_view(p, url)
         finally:
-            try: p.quit()
-            except: pass
+            cleanup_profile(p)
     except Exception as e:
         print(f"  [Worker {worker_id}] Error: {e}", flush=True)
         ok = False
