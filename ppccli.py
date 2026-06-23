@@ -318,6 +318,10 @@ def safe_url(p):
     try: return p.execute_script("return window.location.href") or ""
     except: return ""
 
+def is_arolinks(p):
+    try: return "arolinks." in safe_url(p)
+    except: return False
+
 def nuke_overlays(p):
     dismiss_dialogs(p)
     try:
@@ -723,12 +727,13 @@ def exec_ppc_action(p, a, ex_domains):
         if cd_post and not any(x in cd_post for x in ex_domains):
             return True, cu_post
         # If no new tab opened and click didn't work, wait and retry (button may not be ready)
-        for retry in range(3):
+        arl = is_arolinks(p)
+        for retry in range(5 if arl else 3):
             n_wh2 = len(p.window_handles)
             for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here","Gate Link"]:
                 if click_any_native(p, t) or click_any(p, t, bottom_up=True):
                     break
-            time.sleep(2)
+            time.sleep(3 if arl else 2)
             if len(p.window_handles) > n_wh2:
                 try:
                     p.switch_to.window(p.window_handles[-1])
@@ -754,7 +759,9 @@ def exec_ppc_action(p, a, ex_domains):
 
     if a == "telegram":
         n_wh = len(p.window_handles)
-        for t in ["Telegram","telegram","Join Our"]:
+        arl = is_arolinks(p)
+        for t in (["Telegram","telegram","Join Our","AroLinks","arolinks"] if arl else
+                  ["Telegram","telegram","Join Our"]):
             if click_any(p, t): time.sleep(3); break
         if len(p.window_handles) > n_wh:
             try:
@@ -1121,6 +1128,12 @@ def run_view(p, url):
             time.sleep(3)
             close_extra_tabs(p)
             continue
+
+        # AroLinks needs extra page load patience
+        if "arolinks." in cd:
+            wp = worker_prefix()
+            print(f"{wp} [AroLinks] Extra load wait...", flush=True)
+            time.sleep(5)
 
         # Read page and parse actions
         txt = ""
