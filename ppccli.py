@@ -309,7 +309,7 @@ def close_extra_tabs(p):
                     # Keep about:blank tabs (still loading interstitial) and non-excluded destinations
                     if "about:blank" not in cu:
                         cd = urlparse(cu).netloc
-                        if cd and not any(x in cd for x in EX_DOMAINS):
+                        if cd and not any(x in cd for x in EX_DOMAINS + SOCIAL_DOMAINS):
                             continue
                         p.close()
                 except: pass
@@ -346,7 +346,7 @@ def check_tab_dest(p, ex_domains):
         cu = safe_url(p)
         if cu:
             cd = urlparse(cu).netloc
-            if cd and not any(x in cd for x in ex_domains):
+            if cd and not any(x in cd for x in ex_domains + SOCIAL_DOMAINS):
                 body = (p.execute_script("return (document.body.innerText||'').trim().length") or 0)
                 if body > 50:
                     return True, cu
@@ -541,6 +541,7 @@ def parse_ppc_actions(txt):
     return actions
 
 def exec_ppc_action(p, a, ex_domains):
+    global MAIN_HANDLE
     if a == "not_interested":
         for t in ["Continue","continue","CONTINUE","OK","Okay"]:
             if click_any(p, t): break
@@ -652,7 +653,6 @@ def exec_ppc_action(p, a, ex_domains):
                             if not any(x in cd_pop for x in ex_domains):
                                 return True, cu_pop
                             # PPC-domain in new tab — adopt it as current tab
-                            global MAIN_HANDLE
                             MAIN_HANDLE = p.current_window_handle
                         break
             except: pass
@@ -660,24 +660,34 @@ def exec_ppc_action(p, a, ex_domains):
         cd_post = urlparse(cu_post).netloc
         if cd_post and not any(x in cd_post for x in ex_domains):
             return True, cu_post
-        hrefs = p.execute_script("""
-            var els = document.querySelectorAll('a[href]');
-            for(var i=els.length-1;i>=0;i--){
-                var e=els[i];
-                if(e.offsetWidth>0&&e.offsetHeight>0){
-                    var t=(e.innerText||'').toLowerCase();
-                    if(t.indexOf('get link')!=-1||t.indexOf('download')!=-1){
-                        return e.href;
-                    }
-                }
-            }
-            return '';
-        """) or ""
-        if hrefs and 'javascript' not in hrefs:
-            cd_href = urlparse(hrefs).netloc
-            if cd_href and not any(x in cd_href for x in ex_domains):
-                safe_navigate(p, hrefs)
-                return True, hrefs
+        # If no new tab opened and click didn't work, wait and retry (button may not be ready)
+        for retry in range(3):
+            n_wh2 = len(p.window_handles)
+            for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here","Gate Link"]:
+                if click_any_native(p, t) or click_any(p, t, bottom_up=True):
+                    break
+            time.sleep(2)
+            if len(p.window_handles) > n_wh2:
+                try:
+                    p.switch_to.window(p.window_handles[-1])
+                    for _ in range(20):
+                        time.sleep(0.5)
+                        cu_pop = safe_url(p)
+                        if cu_pop and "about:blank" not in cu_pop:
+                            cd_pop = urlparse(cu_pop).netloc
+                            if cd_pop:
+                                if not any(x in cd_pop for x in ex_domains):
+                                    return True, cu_pop
+                                MAIN_HANDLE = p.current_window_handle
+                            break
+                except: pass
+            # Check if current page navigated to destination
+            cu_retry = safe_url(p)
+            cd_retry = urlparse(cu_retry).netloc
+            if cd_retry and not any(x in cd_retry for x in ex_domains):
+                return True, cu_retry
+            if n_wh2 == len(p.window_handles):
+                time.sleep(3)
         return False, None
 
     if a == "telegram":
@@ -710,11 +720,15 @@ def exec_ppc_action(p, a, ex_domains):
         if not m:
             m = re.search(r'(?:linkpays\s+)?(\d+)\s*(sec|second)', txt[:200], re.I)
         sec = int(m.group(1)) if m else 12
+        # Only break early if text appears NEW (wasn't present when timer started)
+        initial_text = txt
         for i in range(sec):
             time.sleep(1)
             try:
                 body = (p.execute_script("return document.body.innerText||''") or "").lower()
-                if "get link" in body or "download" in body or "your link" in body or "destination" in body:
+                # "get link" or "download" appearing = timer finished
+                if ("get link" in body and "get link" not in initial_text) or \
+                   ("download" in body and "download" not in initial_text):
                     break
             except: pass
         return False, None
@@ -904,7 +918,7 @@ def run_view(p, url):
                 p.switch_to.window(wh); time.sleep(0.15)
                 f, d = check_tab_dest(p, ex_domains)
                 if f:
-                    return True
+                    return True, d
             except: pass
         switch_main(p)
 
@@ -915,19 +929,19 @@ def run_view(p, url):
         # Google CAPTCHA / sorry page — fast fail
         if "google.com/sorry" in cu or "/sorry/index" in cu:
             print("  [Abort] Google CAPTCHA block — skipping", flush=True)
-            return False
+            return False, None
 
         # Chrome-error abort
         if "chrome-error" in cu or "chromewebdata" in cd:
             err_count += 1
             if err_count >= 3:
                 print("  [Abort] Chrome error 3x — skipping", flush=True)
-                return False
+                return False, None
         else:
             err_count = max(0, err_count - 1)
 
         # Skip excluded domains (no action parsing)
-        if cd and not any(x in cd for x in ex_domains):
+        if cd and not any(x in cd for x in ex_domains + SOCIAL_DOMAINS):
             try:
                 txt_check = (p.execute_script("return document.body.innerText||''") or "").lower()
                 if any(ind in txt_check for ind in PPC_INDICATORS):
@@ -935,7 +949,7 @@ def run_view(p, url):
                     continue
             except: pass
             print(f"  Destination: {cu[:100]}", flush=True)
-            return True
+            return True, cu
 
         # Same URL tracking
         if cu == last_url:
@@ -951,7 +965,7 @@ def run_view(p, url):
             has_indicators = any(ind in cur_text.lower() for ind in PPC_INDICATORS)
             if same_text_count >= 5 and not has_indicators:
                 print(f"  [Abort] Same page content {same_text_count}x with no indicators — skipping", flush=True)
-                return False
+                return False, None
         else:
             same_text_count = 0
         last_text = cur_text
@@ -961,7 +975,7 @@ def run_view(p, url):
             stuck_count += 1
             if stuck_count >= 3:
                 print("  [Abort] Page stuck 3x — skipping", flush=True)
-                return False
+                return False, None
             nuke_overlays(p)
             scroll_incremental(p, 15)
             for t in ["Get Link","get link","Download","download","Get Destination Link","Destination Link"]:
@@ -970,7 +984,7 @@ def run_view(p, url):
             if cd_stuck and not any(x in cd_stuck for x in ex_domains):
                 found, dest = find_dest_in_page(p, ex_domains, force=True)
                 if found:
-                    return True
+                    return True, dest
 
         nuke_overlays(p)
 
@@ -990,7 +1004,7 @@ def run_view(p, url):
         if any(x in cu_path for x in ["privacy", "disclaimer", "terms", "policy", "copyright"]):
             found, dest = find_dest_in_page(p, ex_domains, force=True)
             if found:
-                return True
+                return True, dest
             print("  [Skip] Privacy/policy page — scanning for destination...", flush=True)
             continue
 
@@ -1014,7 +1028,7 @@ def run_view(p, url):
             switch_main(p)
             cu = safe_url(p); cd = urlparse(cu).netloc
             if cd and not any(x in cd for x in ex_domains):
-                return True
+                return True, cu
             # If still on same base URL after vignette, try Continue once more
             if cu.split("#")[0] == cu_before:
                 for _ in range(2):
@@ -1028,7 +1042,7 @@ def run_view(p, url):
                     time.sleep(2)
                 cu = safe_url(p); cd = urlparse(cu).netloc
                 if cd and not any(x in cd for x in ex_domains):
-                    return True
+                    return True, cu
             continue
 
         # Ad pages
@@ -1078,7 +1092,7 @@ def run_view(p, url):
             time.sleep(0.2)
 
             if dest_found:
-                return True
+                return True, dest_url
 
             # Check all tabs for destination
             for wh in p.window_handles:
@@ -1086,7 +1100,7 @@ def run_view(p, url):
                     p.switch_to.window(wh); time.sleep(0.15)
                     f, d = check_tab_dest(p, ex_domains)
                     if f:
-                        return True
+                        return True, d
                 except: pass
             switch_main(p)
             close_extra_tabs(p)
@@ -1095,7 +1109,7 @@ def run_view(p, url):
             cd2 = urlparse(cu2).netloc
             if cd2 and not any(x in cd2 for x in ex_domains):
                 print(f"  Destination: {cu2[:80]}", flush=True)
-                return True
+                return True, cu2
             if cu2 and cu2 != prev_url:
                 print(f"  URL changed: {cu2[:60]}", flush=True)
                 # If still on same PPC domain after Continue, try more Continue clicks
@@ -1108,7 +1122,7 @@ def run_view(p, url):
                     cd3 = urlparse(cu3).netloc
                     if cd3 and not any(x in cd3 for x in ex_domains):
                         print(f"  Destination: {cu3[:80]}", flush=True)
-                        return True
+                        return True, cu3
                 break
 
         # If URL changed during actions, skip fallback DOM scan — let next hop process the new page
@@ -1124,7 +1138,7 @@ def run_view(p, url):
                         p.switch_to.window(wh)
                         f, d = check_tab_dest(p, ex_domains)
                         if f:
-                            return True
+                            return True, d
                     except: pass
                 switch_main(p)
                 cu2 = safe_url(p)
@@ -1142,20 +1156,20 @@ def run_view(p, url):
         if not url_changed:
             found, dest = find_dest_in_page(p, ex_domains)
             if found:
-                return True
+                return True, dest
             # PPC-domain article page with no indicators/actions — treat as final destination
             if cd and any(x in cd for x in PPC_DOMAINS) and not actions and txt.strip() and \
                not any(ind in txt.lower() for ind in PPC_INDICATORS):
                 print(f"  Destination (PPC article): {cu[:80]}", flush=True)
-                return True
+                return True, cu
 
     # After hop loop exhausted
     switch_main(p); time.sleep(1)
     cu = safe_url(p)
     cd = urlparse(cu).netloc
     if cd and not any(x in cd for x in ex_domains):
-        return True
-    return False
+        return True, cu
+    return False, None
 
 # ──────────────────────────────────────────────
 # WORKER
@@ -1178,7 +1192,7 @@ def worker(url, total_views):
                 try: p.quit()
                 except: pass
                 p = make_driver()
-            ok = run_view(p, url)
+            ok, dest_url = run_view(p, url)
             if not ok:
                 print(f"  [Retry] Restarting view {v+1}...", flush=True)
                 if rotate and not ip_rotated:
@@ -1190,8 +1204,11 @@ def worker(url, total_views):
                     try: p.quit()
                     except: pass
                     p = make_driver()
-                ok = run_view(p, url)
-            print(f"  {'[✓] SUCCESS' if ok else '[✗] FAILED'}", flush=True)
+                ok, dest_url = run_view(p, url)
+            if ok and dest_url:
+                print(f"  {'[✓] SUCCESS'}  → {dest_url[:100]}", flush=True)
+            else:
+                print(f"  {'[✓] SUCCESS' if ok else '[✗] FAILED'}", flush=True)
     finally:
         try: p.quit()
         except: pass
@@ -1207,17 +1224,18 @@ def _worker_process(url, worker_id, result_queue):
     vnc_port = 5900 + worker_id
     os.environ["DISPLAY"] = f":{display_num}"
     os.environ["VNC_PORT"] = str(vnc_port)
+    dest_url = None
     try:
         p = make_driver()
         try:
-            ok = run_view(p, url)
+            ok, dest_url = run_view(p, url)
         finally:
             try: p.quit()
             except: pass
     except Exception as e:
         print(f"  [Worker {worker_id}] Error: {e}", flush=True)
         ok = False
-    result_queue.put((worker_id, url, ok))
+    result_queue.put((worker_id, url, ok, dest_url))
 
 def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_parallel=False):
     """Parallel orchestrator: sessions → rotate IP → start all workers → summary.
@@ -1303,13 +1321,15 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
             total = len(results)
             rate = (successes * 100 // total) if total else 0
 
-            print(f"\n  {'='*40}", flush=True)
+            print(f"\n  {'='*50}", flush=True)
             print(f"  Session {session_count} Summary", flush=True)
-            print(f"  {'='*40}", flush=True)
+            print(f"  {'='*50}", flush=True)
             for r in sorted(results, key=lambda x: x[0]):
-                status = "[✓] SUCCESS" if r[2] else "[✗] FAILED"
-                print(f"    Worker {r[0]}: {status}", flush=True)
-            print(f"  {'='*40}", flush=True)
+                wid, orig_url, ok, dest = r[0], r[1], r[2], r[3] if len(r) > 3 else None
+                status = "[✓] SUCCESS" if ok else "[✗] FAILED"
+                dest_str = f"  → {dest[:100]}" if ok and dest else ""
+                print(f"    Worker {wid}: {status}{dest_str}", flush=True)
+            print(f"  {'='*50}", flush=True)
             print(f"  Result: {successes}/{total} succeeded  ({rate}%)  |  Time: {elapsed_str}", flush=True)
 
             if successes > 0:
