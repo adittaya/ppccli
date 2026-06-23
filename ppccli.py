@@ -605,6 +605,30 @@ def exec_ppc_action(p, a, ex_domains):
             cu2 = safe_url(p); cd2 = urlparse(cu2).netloc
             if cd2 != cd:
                 break
+        # Final fallback: if JS click loop didn't change domain, extract Continue href and navigate directly
+        if safe_url(p) == cu:
+            for _ in range(2):
+                try:
+                    href = p.execute_script("""
+                        var els = document.querySelectorAll('a[href]');
+                        for(var i=0;i<els.length;i++){
+                            var e=els[i];
+                            if(e.offsetWidth>0&&e.offsetHeight>0){
+                                var t=(e.innerText||'').toUpperCase();
+                                if(t.indexOf('CONTINUE')!=-1 && e.href && e.href.indexOf('javascript')!==0){
+                                    e.scrollIntoView({block:'center',behavior:'instant'});
+                                    return e.href;
+                                }
+                            }
+                        }
+                        return '';
+                    """) or ""
+                    if href:
+                        safe_navigate(p, href)
+                        cu2 = safe_url(p); cd2 = urlparse(cu2).netloc
+                        if cd2 != cd:
+                            break
+                except: pass
         return False, None
 
     if a == "click_image":
@@ -719,7 +743,7 @@ def exec_ppc_action(p, a, ex_domains):
             m = re.search(r'(\d+)\s*(sec|second)\s*(link|generating|remaining)', txt, re.I)
         if not m:
             m = re.search(r'(?:linkpays\s+)?(\d+)\s*(sec|second)', txt[:200], re.I)
-        sec = int(m.group(1)) if m else 12
+        sec = int(m.group(1)) if m else 16
         # Only break early if text appears NEW (wasn't present when timer started)
         initial_text = txt
         for i in range(sec):
@@ -731,6 +755,8 @@ def exec_ppc_action(p, a, ex_domains):
                    ("download" in body and "download" not in initial_text):
                     break
             except: pass
+        # Small grace period for JS to enable the button after the countdown
+        time.sleep(2)
         return False, None
 
     return False, None
