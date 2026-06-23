@@ -147,11 +147,6 @@ def random_ua():
     return f"Mozilla/5.0 (Linux; Android {av}; {dv}) AppleWebKit/534.36 (KHTML, like Gecko) Chrome/{cv} Mobile Safari/534.36"
 
 def make_driver():
-    # Kill zombie Chrome processes left from crashed sessions (only our temp profiles)
-    try:
-        for old_dir in glob.glob("/tmp/ppccli_*"):
-            subprocess.run(f"pkill -9 -f '{old_dir}' 2>/dev/null", shell=True)
-    except: pass
     time.sleep(random.uniform(1, 3))
     ensure_display()
     vw = 390 + random.randint(-30, 30)
@@ -277,6 +272,20 @@ def cleanup_profile(p):
             time.sleep(0.5)
             subprocess.run(f"rm -rf '{profile}' 2>/dev/null", shell=True)
     except: pass
+
+def cleanup_session():
+    """Kill zombie Chrome processes and clean temp profiles.
+    Called at the START of every session before workers launch.
+    """
+    try:
+        for old_dir in glob.glob("/tmp/ppccli_*"):
+            if os.path.isdir(old_dir):
+                subprocess.run(f"pkill -9 -f '{old_dir}' 2>/dev/null", shell=True)
+                subprocess.run(f"rm -rf '{old_dir}' 2>/dev/null", shell=True)
+        subprocess.run("pkill -9 -f 'chrome.*--user-data-dir=/tmp/ppccli_' 2>/dev/null", shell=True)
+        subprocess.run("pkill -9 -f chromedriver 2>/dev/null", shell=True)
+    except: pass
+    time.sleep(1)
 
 def safe_navigate(p, url, retries=3):
     for attempt in range(retries):
@@ -1232,6 +1241,7 @@ def worker(url, total_views):
     try:
         for v in range(total_views):
             print(f"\n{'='*50}\n  View {v+1}/{total_views}\n{'='*50}", flush=True)
+            cleanup_session()
             ip_rotated = False
             if rotate:
                 ip_rotated = rotate_ip()
@@ -1337,6 +1347,7 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                   f"{'with IP rotation' if rotate else 'no IP rotation'}", flush=True)
             print(f"{'='*60}", flush=True)
 
+            cleanup_session()
             if rotate:
                 print(f"\n  Rotating IP before session...", flush=True)
                 ip_ok = rotate_ip()
