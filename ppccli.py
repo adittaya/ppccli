@@ -1265,6 +1265,7 @@ def worker(url, total_views):
                 if not reset_driver(p):
                     cleanup_profile(p)
                     p = make_driver()
+                cleanup_session()
                 ok, dest_url = run_view(p, url)
             if ok and dest_url:
                 print(f"  {'[✓] SUCCESS'}  → {dest_url[:100]}", flush=True)
@@ -1288,6 +1289,7 @@ def _worker_process(url, worker_id, result_queue):
     try:
         p = make_driver()
         try:
+            cleanup_session()
             ok, dest_url = run_view(p, url)
         finally:
             cleanup_profile(p)
