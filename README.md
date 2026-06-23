@@ -17,7 +17,27 @@ cd ppccli
 bash setup.sh
 ```
 
-This installs Chromium, chromedriver, Xvfb, x11vnc, Python packages, and creates the `ppccli` command. Then you can run:
+Or directly from GitHub (no clone needed):
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/adittaya/ppccli/main/setup.sh)
+```
+
+The installer:
+- Auto-detects your OS and package manager (apt/dnf/yum/pacman/apk/zypper)
+- Installs Chromium, chromedriver, Xvfb, x11vnc, Python 3, pip
+- Installs Python packages (selenium, requests) with automatic fallback strategies
+- Creates the `ppccli` command in `/usr/local/bin`
+- Verifies every component — with retry logic and clear error messages
+- Full log saved to `/tmp/ppccli-setup-*.log`
+
+```bash
+# Interactive mode (recommended for first use)
+ppccli -i
+
+# Or pass a URL directly
+ppccli "https://arolinks.com/zREqi"
+```
 
 ```bash
 # Interactive mode (recommended for first use)
@@ -118,17 +138,17 @@ The script:
 
 ## Requirements
 
-| Dependency | Purpose |
-|-----------|---------|
-| **Python 3.8+** | Script runtime |
-| **Chromium** | Headless browser |
-| **Chromedriver** | Selenium WebDriver |
-| **Xvfb** | Virtual framebuffer (headless display) |
-| **x11vnc** | VNC server (optional, for debugging) |
-| **selenium** | Python browser automation |
-| **MacroDroid** (Android) | IP rotation via airplane mode toggle |
+| Dependency | Purpose | Auto-installed |
+|-----------|---------|:---:|
+| **Python 3.8+** | Script runtime | ✓ |
+| **Chromium** | Headless browser | ✓ |
+| **Chromedriver** | Selenium WebDriver | ✓ |
+| **Xvfb** | Virtual framebuffer (headless display) | ✓ |
+| **x11vnc** | VNC server (optional, for debugging) | ✓ |
+| **selenium** | Python browser automation | ✓ |
+| **MacroDroid** (Android) | IP rotation via airplane mode toggle | Manual setup (see guides) |
 
-All installed automatically by `setup.sh`.
+All system packages and Python dependencies installed automatically by `setup.sh`.
 
 ## Project Structure
 
