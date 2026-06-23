@@ -727,6 +727,13 @@ def rotate_ip():
                 return True
             except: pass
         return False
+    # Clean any stale lock before attempting
+    try:
+        st = os.stat(ROTATE_LOCK)
+        if time.time() - st.st_mtime > 30:
+            os.rmdir(ROTATE_LOCK)
+    except (FileNotFoundError, OSError): pass
+
     try:
         os.mkdir(ROTATE_LOCK)
         primary = True
@@ -753,17 +760,21 @@ def rotate_ip():
         except: pass
         return False
 
-    # Toggle: Airplane ON → OFF → check network
-    for _ in range(2):
-        print("  [IP] Airplane ON", flush=True)
+    # Keep toggling until IP actually changes (up to 10 attempts)
+    for attempt in range(1, 11):
+        print(f"  [IP] Toggle {attempt}/10", flush=True)
         _md()
         time.sleep(8)
-        print("  [IP] Airplane OFF", flush=True)
-        _md()
         if _check_network(timeout=25):
-            print("  [IP] Network OK", flush=True)
-            break
-        print("  [IP] Network down — toggling once more...", flush=True)
+            new_ip = check_ip()
+            if new_ip and new_ip != old_ip:
+                print(f"  [IP] IP changed: {old_ip} → {new_ip}", flush=True)
+                break
+            print(f"  [IP] IP unchanged ({new_ip}) — toggling again...", flush=True)
+        else:
+            print("  [IP] Network down — toggling again...", flush=True)
+    else:
+        print("  [IP] Failed to change IP after 10 attempts", flush=True)
 
     new_ip = check_ip() or "unknown"
     changed = new_ip != old_ip and old_ip != "unknown" and new_ip != "unknown"
@@ -1184,6 +1195,7 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                 current_ip = check_ip()
                 print(f"  Global IP: {current_ip or 'unknown'}", flush=True)
 
+            session_start = time.time()
             rq = mp_ctx.Queue()
             procs = []
             for w in group:
@@ -1199,6 +1211,11 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
             while not rq.empty():
                 results.append(rq.get())
 
+            elapsed = time.time() - session_start
+            elapsed_str = f"{int(elapsed//60):02d}:{int(elapsed%60):02d}"
+            if elapsed >= 3600:
+                elapsed_str = f"{int(elapsed//3600):02d}:{int(elapsed%3600)//60:02d}:{int(elapsed%60):02d}"
+
             successes = sum(1 for r in results if r[2])
             total = len(results)
             rate = (successes * 100 // total) if total else 0
@@ -1210,7 +1227,7 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                 status = "[✓] SUCCESS" if r[2] else "[✗] FAILED"
                 print(f"    Worker {r[0]}: {status}", flush=True)
             print(f"  {'='*40}", flush=True)
-            print(f"  Result: {successes}/{total} succeeded  ({rate}%)", flush=True)
+            print(f"  Result: {successes}/{total} succeeded  ({rate}%)  |  Time: {elapsed_str}", flush=True)
 
             if successes > 0:
                 overall_success = True
