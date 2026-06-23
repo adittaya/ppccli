@@ -197,7 +197,7 @@ def make_driver():
     o.page_load_strategy = "none"
     for attempt in range(5):
         try:
-            d = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=o)
+            d = webdriver.Chrome(service=Service("/usr/bin/chromedriver", service_creation_timeout=25), options=o)
             break
         except Exception as e:
             if attempt < 4:
@@ -1192,7 +1192,7 @@ def run_view(p, url):
             if cd2 and not any(x in cd2 for x in ex_domains):
                 print(f"{wp} Destination: {cu2[:80]}", flush=True)
                 return True, cu2
-            if cu2 and cu2 != prev_url:
+            if cu2 and cu2.split('#')[0] != prev_url.split('#')[0]:
                 print(f"{wp} URL changed: {cu2[:60]}", flush=True)
                 # If still on same PPC domain after Continue, try more Continue clicks
                 if cd2 and any(x in cd2 for x in PPC_DOMAINS) and a == "scroll_continue":
@@ -1208,7 +1208,7 @@ def run_view(p, url):
                 break
 
         # If URL changed during actions, skip fallback DOM scan — let next hop process the new page
-        url_changed = safe_url(p) != cu
+        url_changed = safe_url(p).split('#')[0] != cu.split('#')[0]
 
         # Post-action Get Link check
         if "get_link" not in actions:
@@ -1314,9 +1314,13 @@ def _worker_process(url, worker_id, result_queue):
         finally:
             cleanup_profile(p)
     except Exception as e:
-        print(f"  [Worker {worker_id}] Error: {e}", flush=True)
+        msg = f"  [Worker {worker_id}] Error: {e}"
+        print(msg, flush=True)
+        sys.stderr.write(msg + "\n"); sys.stderr.flush()
         ok = False
-    result_queue.put((worker_id, url, ok, dest_url))
+    try:
+        result_queue.put((worker_id, url, ok, dest_url))
+    except: pass
 
 def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_parallel=False):
     """Parallel orchestrator: sessions → rotate IP → start all workers → summary.
