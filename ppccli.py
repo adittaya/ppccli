@@ -140,7 +140,7 @@ def random_ua():
     return f"Mozilla/5.0 (Linux; Android {av}; {dv}) AppleWebKit/534.36 (KHTML, like Gecko) Chrome/{cv} Mobile Safari/534.36"
 
 def make_driver():
-    time.sleep(random.uniform(2, 7))
+    time.sleep(random.uniform(1, 3))
     ensure_display()
     vw = 390 + random.randint(-30, 30)
     vh = 844 + random.randint(-30, 30)
@@ -171,6 +171,9 @@ def make_driver():
     o.add_argument("--memory-pressure-off")
     o.add_argument("--aggressive-cache-discard")
     o.add_argument("--disk-cache-size=1")
+    o.add_argument("--disable-sync")
+    o.add_argument("--disable-translate")
+    o.add_argument("--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplayPolicies,OptimizationGuideModelDownloading,OptimizationHintsFetching")
     o.add_argument(f"--window-size={vw},{vh}")
     o.add_argument("--disable-blink-features=AutomationControlled")
     o.add_argument(f"--user-agent={ua}")
@@ -192,9 +195,9 @@ def make_driver():
                 time.sleep(3 + attempt * 3)
             else:
                 raise e
-    d.set_page_load_timeout(8)
-    d.set_script_timeout(6)
-    d.implicitly_wait(3)
+    d.set_page_load_timeout(5)
+    d.set_script_timeout(4)
+    d.implicitly_wait(2)
     vw_adj = vw + random.randint(-5, 5)
     vh_adj = vh + random.randint(-5, 5)
     scale = random.choice([2.0, 2.5, 2.75, 3.0, 3.5])
@@ -203,6 +206,18 @@ def make_driver():
         "deviceScaleFactor": scale, "screenOrientation": {"type": "portraitPrimary", "angle": 0},
         "touch": True,
     })
+    # Block non-essential resources (fonts, media, trackers) for speed
+    try:
+        d.execute_cdp_cmd("Network.enable", {})
+        d.execute_cdp_cmd("Network.setBlockedURLs", {"urls": [
+            "*.woff", "*.woff2", "*.ttf", "*.eot",
+            "*.mp4", "*.webm", "*.mp3", "*.ogg",
+            "*doubleclick*", "*googleadservices*", "*googlesyndication*",
+            "*facebook.com*", "*fbcdn*", "*analytics*", "*tracking*",
+            "*gtag*", "*googletagmanager*", "*scorecardresearch*",
+        ]})
+    except: pass
+
     d.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
         Object.defineProperty(navigator,'webdriver',{{get:()=>undefined}});
         Object.defineProperty(navigator,'plugins',{{get:()=>[1,2,3,4,5]}});
@@ -255,14 +270,14 @@ def safe_url(p):
 def nuke_overlays(p):
     dismiss_dialogs(p)
     try:
-        p.execute_script(NUKE_JS); time.sleep(0.2)
+        p.execute_script(NUKE_JS); time.sleep(0.1)
         p.execute_script("""
             document.querySelectorAll('[class*="close"],[aria-label*="Close"],[id*="close"],[class*="dismiss"],[aria-label*="Dismiss"]').forEach(function(e){
                 if(e.offsetWidth>0&&e.offsetHeight>0){try{e.click()}catch(e){}}});
             document.querySelectorAll('*').forEach(function(e){
                 if(e.offsetWidth>0&&e.offsetHeight>0&&(e.innerText=='\u00d7'||e.innerText=='\u2715')){try{e.click()}catch(e){}}});
         """)
-        time.sleep(0.2)
+        time.sleep(0.1)
     except: pass
 
 def switch_main(p):
@@ -299,7 +314,7 @@ def reset_driver(p):
         p.execute_cdp_cmd("Network.clearBrowserCookies", {})
         p.execute_cdp_cmd("Network.clearBrowserCache", {})
         p.execute_script("window.location.href='about:blank'")
-        time.sleep(1)
+        time.sleep(0.5)
         return True
     except:
         return False
@@ -308,10 +323,10 @@ def scroll_incremental(p, steps=8):
     for i in range(steps):
         try: p.execute_script(f"window.scrollBy(0, document.body.scrollHeight/{steps});")
         except: break
-        time.sleep(0.2)
+        time.sleep(0.1)
     try: p.execute_script("window.scrollTo(0, document.body.scrollHeight);")
     except: pass
-    time.sleep(0.5)
+    time.sleep(0.3)
 
 def check_tab_dest(p, ex_domains):
     try:
@@ -495,13 +510,19 @@ def exec_ppc_action(p, a, ex_domains):
     if a == "step2":
         txt = (p.execute_script("return document.body.innerText||''") or "").lower()
         if "click any image" in txt:
-            time.sleep(14)
+            for _ in range(14):
+                time.sleep(1)
+                try:
+                    body = (p.execute_script("return document.body.innerText||''") or "").lower()
+                    if "verify" in body and ("click to verify" in body or " button" in body or " continue" in body):
+                        break
+                except: pass
         for t in ["Verify","verify","VERIFY","click to verify"]:
-            if click_any(p, t): time.sleep(2); break
+            if click_any(p, t): time.sleep(1); break
         return False, None
 
     if a == "scroll_continue":
-        scroll_incremental(p, 15)
+        scroll_incremental(p, 10)
         cu = safe_url(p); cd = urlparse(cu).netloc
         # Try domain-chain navigation: find a link to the next PPC domain
         for pcd, nxt in PPC_CHAIN.items():
@@ -515,7 +536,7 @@ def exec_ppc_action(p, a, ex_domains):
                     for href in links:
                         hn = urlparse(href).netloc
                         if any(x in hn for x in nxt):
-                            try: p.get(href); time.sleep(3)
+                            try: p.get(href); time.sleep(2)
                             except: pass
                             return False, None
                 except: pass
@@ -539,7 +560,7 @@ def exec_ppc_action(p, a, ex_domains):
                 clicked = False
             if not clicked:
                 break
-            time.sleep(2)
+            time.sleep(1.5)
             cu2 = safe_url(p); cd2 = urlparse(cu2).netloc
             if cd2 != cd:
                 break
@@ -550,13 +571,13 @@ def exec_ppc_action(p, a, ex_domains):
         return False, None
 
     if a == "verify":
-        scroll_incremental(p, 8)
-        for t in ["Verify","verify","VERIFY","click to verify"]:
-            if click_any(p, t): time.sleep(1); break
         scroll_incremental(p, 5)
+        for t in ["Verify","verify","VERIFY","click to verify"]:
+            if click_any(p, t): time.sleep(0.5); break
+        scroll_incremental(p, 3)
         for t in ["Continue","continue","CONTINUE"]:
             if click_any(p, t):
-                time.sleep(2)
+                time.sleep(1)
                 break
         return False, None
 
@@ -565,18 +586,18 @@ def exec_ppc_action(p, a, ex_domains):
         return False, None
 
     if a == "get_link":
-        scroll_incremental(p, 10)
+        scroll_incremental(p, 6)
         time.sleep(1)
         n_wh = len(p.window_handles)
         for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Destination Link","Click Here","Gate Link"]:
             if click_any_native(p, t) or click_any(p, t, bottom_up=True):
                 break
-        time.sleep(3)
+        time.sleep(2)
         if len(p.window_handles) > n_wh:
             try:
                 p.switch_to.window(p.window_handles[-1])
-                for _ in range(25):
-                    time.sleep(1)
+                for _ in range(20):
+                    time.sleep(0.5)
                     cu_pop = safe_url(p)
                     if cu_pop and "about:blank" not in cu_pop:
                         cd_pop = urlparse(cu_pop).netloc
@@ -609,7 +630,7 @@ def exec_ppc_action(p, a, ex_domains):
             cd_href = urlparse(hrefs).netloc
             if cd_href and not any(x in cd_href for x in ex_domains):
                 p.get(hrefs)
-                time.sleep(5)
+                time.sleep(3)
                 return True, hrefs
         return False, None
 
@@ -631,14 +652,20 @@ def exec_ppc_action(p, a, ex_domains):
 
     if a == "timer":
         txt = (p.execute_script("return document.body.innerText||''") or "").lower()
+        # Try to skip timer if page offers a skip mechanism
+        if "skip timer" in txt or "click any image" in txt or "click ads" in txt or "click below" in txt:
+            click_any_image(p); time.sleep(0.3)
+            body = (p.execute_script("return document.body.innerText||''") or "").lower()
+            if "get link" in body or "download" in body or "your link" in body or "destination" in body:
+                return False, None
         m = re.search(r'wait\s*(\d+)\s*(sec|second)', txt, re.I)
         if not m:
             m = re.search(r'(\d+)\s*(sec|second)\s*(link|generating|remaining)', txt, re.I)
         if not m:
             m = re.search(r'(?:linkpays\s+)?(\d+)\s*(sec|second)', txt[:200], re.I)
         sec = int(m.group(1)) if m else 12
-        for i in range(0, sec + 3, 2):
-            time.sleep(2)
+        for i in range(sec):
+            time.sleep(1)
             try:
                 body = (p.execute_script("return document.body.innerText||''") or "").lower()
                 if "get link" in body or "download" in body or "your link" in body or "destination" in body:
@@ -652,11 +679,11 @@ def exec_ppc_action(p, a, ex_domains):
 # GOOG_REWARDED HANDLER
 # ──────────────────────────────────────────────
 def handle_goog_rewarded(p):
-    nuke_overlays(p); click_skip(p); time.sleep(1)
-    nuke_overlays(p); click_skip(p); time.sleep(1)
-    # Wait for interstitial ad to complete (up to 30s)
-    for s in range(30):
-        time.sleep(1)
+    nuke_overlays(p); click_skip(p); time.sleep(0.5)
+    nuke_overlays(p); click_skip(p); time.sleep(0.5)
+    # Wait for interstitial ad to complete (up to 15s)
+    for s in range(20):
+        time.sleep(0.5)
         cu = safe_url(p)
         # Check if interstitial is gone (no goog_vignette/goog_rewarded in URL)
         if "#google_vignette" not in cu and "#goog_rewarded" not in cu:
@@ -796,10 +823,10 @@ def run_view(p, url):
     ref = os.environ.get("REFERRER_URL", "")
     if ref:
         p.execute_cdp_cmd("Page.navigate", {"url": url, "referrer": ref})
-        time.sleep(2)
+        time.sleep(1)
     else:
         p.get(url)
-    time.sleep(4)
+    time.sleep(2)
     MAIN_HANDLE = p.current_window_handle
     # Inject view-counter request tracker (injects into all frames)
     p.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
@@ -817,19 +844,19 @@ def run_view(p, url):
     ex_domains = EX_DOMAINS[:]
     same_url_count = 0
     last_url = None
+    last_text = None
+    same_text_count = 0
     err_count = 0
     stuck_count = 0
     for hop in range(45):
-        time.sleep(0.5)
+        time.sleep(0.2)
         switch_main(p)
         dismiss_dialogs(p)
         nuke_overlays(p)
 
-        # Check all tabs for destination
-        found = False
         for wh in p.window_handles:
             try:
-                p.switch_to.window(wh); time.sleep(0.3)
+                p.switch_to.window(wh); time.sleep(0.15)
                 f, d = check_tab_dest(p, ex_domains)
                 if f:
                     return True
@@ -870,8 +897,18 @@ def run_view(p, url):
             same_url_count += 1
         else:
             same_url_count = 0
-            stuck_count = 0
         last_url = cu
+
+        # Content-based stuck detection (catches pages with changing fragments but identical body)
+        cur_text = (p.execute_script("return (document.body.innerText||'').substring(0,300)") or "").strip()
+        if cur_text and cur_text == last_text:
+            same_text_count += 1
+            if same_text_count >= 5:
+                print(f"  [Abort] Same page content for {same_text_count} hops — skipping", flush=True)
+                return False
+        else:
+            same_text_count = 0
+        last_text = cur_text
 
         # Stuck handler
         if same_url_count >= 8:
@@ -882,7 +919,7 @@ def run_view(p, url):
             nuke_overlays(p)
             scroll_incremental(p, 15)
             for t in ["Get Link","get link","Download","download","Get Destination Link","Destination Link"]:
-                if click_any(p, t): time.sleep(3); break
+                if click_any(p, t): time.sleep(2); break
             cd_stuck = urlparse(cu).netloc
             if cd_stuck and not any(x in cd_stuck for x in ex_domains):
                 found, dest = find_dest_in_page(p, ex_domains, force=True)
@@ -894,7 +931,7 @@ def run_view(p, url):
         # Initial goBtn click on linkpays.in (first hop)
         if hop == 0 and click_by_id(p, ["goBtn"]):
             print("  [goBtn] Clicked — registering view...", flush=True)
-            time.sleep(5)
+            time.sleep(3)
             # Check if view counter request was tracked
             view_hit = p.execute_script("return window.__ppcView || null;") or ""
             if view_hit:
@@ -920,7 +957,7 @@ def run_view(p, url):
                     gw_found = True
                     break
             if gw_found:
-                switch_main(p); time.sleep(1)
+                switch_main(p); time.sleep(0.5)
                 continue
 
         # Google interstitial
@@ -934,10 +971,10 @@ def run_view(p, url):
                 return True
             # If still on same base URL after vignette, try Continue once more
             if cu.split("#")[0] == cu_before:
-                for _ in range(3):
+                for _ in range(2):
                     for t in ["Continue", "continue", "CONTINUE", "Click Here", "Proceed", "Gate Link", "Get Link"]:
                         if click_any(p, t):
-                            time.sleep(3)
+                            time.sleep(2)
                             break
                     cu2 = safe_url(p)
                     if cu2.split("#")[0] != cu_before:
@@ -992,7 +1029,7 @@ def run_view(p, url):
         for a in actions:
             prev_url = safe_url(p)
             dest_found, dest_url = exec_ppc_action(p, a, ex_domains)
-            time.sleep(0.5)
+            time.sleep(0.2)
 
             if dest_found:
                 return True
@@ -1000,7 +1037,7 @@ def run_view(p, url):
             # Check all tabs for destination
             for wh in p.window_handles:
                 try:
-                    p.switch_to.window(wh); time.sleep(0.3)
+                    p.switch_to.window(wh); time.sleep(0.15)
                     f, d = check_tab_dest(p, ex_domains)
                     if f:
                         return True
@@ -1019,7 +1056,7 @@ def run_view(p, url):
                 if cd2 and any(x in cd2 for x in PPC_DOMAINS) and a == "scroll_continue":
                     for t2 in ["Gate Link","Get Link","Click Here","Proceed","Download","Destination Link","Continue","continue","CONTINUE"]:
                         if click_any(p, t2):
-                            time.sleep(3)
+                            time.sleep(2)
                             break
                     cu3 = safe_url(p)
                     cd3 = urlparse(cu3).netloc
@@ -1034,7 +1071,7 @@ def run_view(p, url):
         # Post-action Get Link check
         if "get_link" not in actions:
             gl_clicked = False
-            for _ in range(3):
+            for _ in range(2):
                 time.sleep(1)
                 for wh in p.window_handles:
                     try:
