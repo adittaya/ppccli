@@ -212,7 +212,6 @@ def make_driver():
         d.execute_cdp_cmd("Network.setBlockedURLs", {"urls": [
             "*.woff", "*.woff2", "*.ttf", "*.eot",
             "*.mp4", "*.webm", "*.mp3", "*.ogg",
-            "*doubleclick*", "*googleadservices*", "*googlesyndication*",
             "*facebook.com*", "*fbcdn*", "*analytics*", "*tracking*",
             "*gtag*", "*googletagmanager*", "*scorecardresearch*",
         ]})
@@ -252,6 +251,20 @@ def make_driver():
         Date.prototype.getTimezoneOffset = function(){{ return {tz}; }};
     """})
     return d
+
+def safe_navigate(p, url, retries=3):
+    for attempt in range(retries):
+        try:
+            p.get(url)
+            time.sleep(1.5)
+            cu = safe_url(p)
+            if "chrome-error" not in cu and "chromewebdata" not in cu:
+                return True
+            print(f"  [Nav] Chrome error attempt {attempt+1}, retrying...", flush=True)
+        except Exception as e:
+            print(f"  [Nav] Exception attempt {attempt+1}: {e}", flush=True)
+            time.sleep(2)
+    return False
 
 # ──────────────────────────────────────────────
 # PAGE HELPERS
@@ -385,11 +398,38 @@ def click_any_native(p, txt):
 
 def click_any_image(p):
     try:
-        return p.execute_script("""
-            var imgs = document.querySelectorAll('img');
-            for(var i=0;i<imgs.length;i++){var img=imgs[i];if(img.offsetWidth>40&&img.offsetHeight>40){var src=(img.src||'').toLowerCase();if(src.indexOf('logo')!=-1)continue;var parent=img.closest('a');img.scrollIntoView({block:'center',behavior:'instant'});if(parent)parent.click();else img.click();return true;}}
-            return false;
-        """)
+        # Wait for images to load (up to 5s), then pick the best one
+        for _ in range(10):
+            ok = p.execute_script("""
+                var best = null;
+                var imgs = document.querySelectorAll('img');
+                for(var i=0;i<imgs.length;i++){
+                    var img=imgs[i];
+                    var w = img.naturalWidth || img.offsetWidth;
+                    var h = img.naturalHeight || img.offsetHeight;
+                    if(w<35||h<35) continue;
+                    var src=(img.src||'').toLowerCase();
+                    if(src.indexOf('logo')!=-1) continue;
+                    var parent=img.closest('a');
+                    var href=(parent?parent.href:'').toLowerCase();
+                    if(href.indexOf('hittracks')!=-1||href.indexOf('chrome-error')!=-1) continue;
+                    if(href.indexOf('vplink')!=-1||href.indexOf('arolinks')!=-1||
+                       href.indexOf('linkpays')!=-1||href.indexOf('savepe')!=-1){
+                        best = {img:img, parent:parent, href:href}; break;
+                    }
+                    if(!best) best = {img:img, parent:parent, href:href};
+                }
+                if(best){
+                    best.img.scrollIntoView({block:'center',behavior:'instant'});
+                    if(best.parent) best.parent.click(); else best.img.click();
+                    return true;
+                }
+                return false;
+            """)
+            if ok:
+                return True
+            time.sleep(0.5)
+        return False
     except: return False
 
 # PPC template element IDs (from linkpays-bypass template)
@@ -475,7 +515,8 @@ def parse_ppc_actions(txt):
         actions.append("not_interested")
     if "step 2/3" in t or "step 2 of 3" in t:
         actions.append("step2")
-    if "please wait" in t or re.search(r'wait\s*\d+\s*(sec|second)', t, re.I) or \
+    if "please wait" in t or "skip timer" in t or \
+       re.search(r'wait\s*\d*\s*(sec|second)', t, re.I) or \
        re.search(r'\d+\s*(sec|second)\s*(link|generating|remaining)', t, re.I) or \
        re.search(r'(?:linkpays\s+)?\d+\s*(sec|second)', t[:200], re.I) or \
        "loading the best option" in t:
@@ -536,8 +577,7 @@ def exec_ppc_action(p, a, ex_domains):
                     for href in links:
                         hn = urlparse(href).netloc
                         if any(x in hn for x in nxt):
-                            try: p.get(href); time.sleep(2)
-                            except: pass
+                            safe_navigate(p, href)
                             return False, None
                 except: pass
                 break
@@ -583,6 +623,13 @@ def exec_ppc_action(p, a, ex_domains):
 
     if a == "click_ads":
         click_any_image(p); time.sleep(1)
+        # After clicking, check if Get Link appeared and auto-click it
+        body = (p.execute_script("return document.body.innerText||''") or "").lower()
+        if "get link" in body or "download" in body or "your link" in body:
+            for t in ["Get Link","get link","Download","download","GET LINK","DOWNLOAD","Gate Link"]:
+                if click_any(p, t):
+                    time.sleep(2)
+                    break
         return False, None
 
     if a == "get_link":
@@ -629,8 +676,7 @@ def exec_ppc_action(p, a, ex_domains):
         if hrefs and 'javascript' not in hrefs:
             cd_href = urlparse(hrefs).netloc
             if cd_href and not any(x in cd_href for x in ex_domains):
-                p.get(hrefs)
-                time.sleep(3)
+                safe_navigate(p, hrefs)
                 return True, hrefs
         return False, None
 
@@ -723,8 +769,7 @@ def handle_goog_rewarded(p):
     if "#google_vignette" in cu or "#goog_rewarded" in cu:
         clean = cu.split("#")[0] if "#" in cu else cu
         if clean:
-            try: p.get(clean); time.sleep(3)
-            except: pass
+            safe_navigate(p, clean)
 
 # ──────────────────────────────────────────────
 # IP ROTATION
@@ -879,7 +924,7 @@ def run_view(p, url):
                 print("  [Abort] Chrome error 3x — skipping", flush=True)
                 return False
         else:
-            err_count = 0
+            err_count = max(0, err_count - 1)
 
         # Skip excluded domains (no action parsing)
         if cd and not any(x in cd for x in ex_domains):
@@ -899,12 +944,13 @@ def run_view(p, url):
             same_url_count = 0
         last_url = cu
 
-        # Content-based stuck detection (catches pages with changing fragments but identical body)
+        # Content-based stuck detection — only abort if page has NO remaining PPC indicators
         cur_text = (p.execute_script("return (document.body.innerText||'').substring(0,300)") or "").strip()
         if cur_text and cur_text == last_text:
             same_text_count += 1
-            if same_text_count >= 5:
-                print(f"  [Abort] Same page content for {same_text_count} hops — skipping", flush=True)
+            has_indicators = any(ind in cur_text.lower() for ind in PPC_INDICATORS)
+            if same_text_count >= 5 and not has_indicators:
+                print(f"  [Abort] Same page content {same_text_count}x with no indicators — skipping", flush=True)
                 return False
         else:
             same_text_count = 0
