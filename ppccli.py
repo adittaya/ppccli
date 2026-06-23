@@ -829,6 +829,11 @@ def run_view(p, url):
         cd = urlparse(cu).netloc
         print(f"  Hop {hop+1}: {cu[:80]}", flush=True)
 
+        # Google CAPTCHA / sorry page — fast fail
+        if "google.com/sorry" in cu or "/sorry/index" in cu:
+            print("  [Abort] Google CAPTCHA block — skipping", flush=True)
+            return False
+
         # Chrome-error abort
         if "chrome-error" in cu or "chromewebdata" in cd:
             err_count += 1
@@ -1162,6 +1167,7 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
             print(f"    Group {gi+1} [{w['label']}] {w['url'][:55]}  ({ip_info})", flush=True)
 
     session_count = 0
+    overall_success = False
     for session in range(views):
         for gi, group in enumerate(groups):
             session_count += 1
@@ -1207,10 +1213,12 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
             print(f"  Result: {successes}/{total} succeeded  ({rate}%)", flush=True)
 
             if successes > 0:
-                print(f"  {'='*40}", flush=True)
-                if all(w["same_ip"] for w in group):
-                    print(f"  ALL GROUPS COMPLETE — stopping", flush=True)
-                return True
+                overall_success = True
+
+    if overall_success:
+        print(f"\n  {'='*40}", flush=True)
+        print(f"  ALL SESSIONS COMPLETE — success", flush=True)
+        return True
 
     print(f"\n  All sessions exhausted — no successful views.", flush=True)
     return False
