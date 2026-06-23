@@ -168,7 +168,8 @@ def make_driver():
     o.add_argument("--no-sandbox")
     o.add_argument("--disable-dev-shm-usage")
     o.add_argument("--test-type")
-    o.add_argument("--headless=old")
+    o.add_argument("--headless")
+    o.add_argument("--use-gl=swiftshader")
     o.add_argument("--disable-gpu")
     o.add_argument("--disable-software-rasterizer")
     o.add_argument("--disable-extensions")
@@ -1348,9 +1349,10 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                   f"{'with IP rotation' if rotate else 'no IP rotation'}", flush=True)
             print(f"{'='*60}", flush=True)
 
+            print(f"  Cleaning up stale processes...", flush=True)
             cleanup_session()
             if rotate:
-                print(f"\n  Rotating IP before session...", flush=True)
+                print(f"  Rotating IP before session...", flush=True)
                 ip_ok = rotate_ip()
                 time.sleep(2)
                 current_ip = check_ip()
