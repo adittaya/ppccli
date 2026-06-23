@@ -68,19 +68,19 @@ DEVICE_MODELS = [
 ROTATE_LOCK = "/tmp/ppccli_ip_rotate"
 MAIN_HANDLE = None
 
-# Clean stale temp profiles and lock from crashed runs
-try:
-    for d in glob.glob("/tmp/ppccli_*"):
-        if os.path.isdir(d):
-            subprocess.run(f"rm -rf '{d}' 2>/dev/null", shell=True)
-except: pass
+# Clean stale temp profiles and lock from crashed runs (MAIN PROCESS ONLY)
+if multiprocessing.current_process().name == 'MainProcess':
+    try:
+        for d in glob.glob("/tmp/ppccli_*"):
+            if os.path.isdir(d):
+                subprocess.run(f"rm -rf '{d}' 2>/dev/null", shell=True)
+    except: pass
 
-# Clean stale lock from crashed runs
-try:
-    st = os.stat(ROTATE_LOCK)
-    if time.time() - st.st_mtime > 300:
-        os.rmdir(ROTATE_LOCK)
-except (FileNotFoundError, OSError): pass
+    try:
+        st = os.stat(ROTATE_LOCK)
+        if time.time() - st.st_mtime > 300:
+            os.rmdir(ROTATE_LOCK)
+    except (FileNotFoundError, OSError): pass
 
 NUKE_JS = r"""
 (function(){
@@ -168,7 +168,7 @@ def make_driver():
     o.add_argument("--no-sandbox")
     o.add_argument("--disable-dev-shm-usage")
     o.add_argument("--test-type")
-    o.add_argument("--headless=old")
+    o.add_argument("--headless")
     o.add_argument("--disable-gpu")
     o.add_argument("--disable-software-rasterizer")
     o.add_argument("--disable-extensions")
@@ -1238,11 +1238,11 @@ def run_view(p, url):
 # ──────────────────────────────────────────────
 def worker(url, total_views):
     rotate = os.environ.get("ROTATE_IP", "").lower() not in ("0","off","false","no")
+    cleanup_session()
     p = make_driver()
     try:
         for v in range(total_views):
             print(f"\n{'='*50}\n  View {v+1}/{total_views}\n{'='*50}", flush=True)
-            cleanup_session()
             ip_rotated = False
             if rotate:
                 ip_rotated = rotate_ip()
@@ -1262,10 +1262,10 @@ def worker(url, total_views):
                         print("  [IP] Rotation FAILED on retry", flush=True)
                     time.sleep(1)
                 ip = check_ip()
+                cleanup_session()
                 if not reset_driver(p):
                     cleanup_profile(p)
                     p = make_driver()
-                cleanup_session()
                 ok, dest_url = run_view(p, url)
             if ok and dest_url:
                 print(f"  {'[✓] SUCCESS'}  → {dest_url[:100]}", flush=True)
@@ -1289,7 +1289,6 @@ def _worker_process(url, worker_id, result_queue):
     try:
         p = make_driver()
         try:
-            cleanup_session()
             ok, dest_url = run_view(p, url)
         finally:
             cleanup_profile(p)
@@ -1368,7 +1367,11 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                 print(f"  [Started] {w['label']} — Display :{99 + w['id']}", flush=True)
 
             for p in procs:
-                p.join()
+                p.join(timeout=180)
+                if p.is_alive():
+                    print(f"  [Timeout] Worker still alive after 180s, killing...", flush=True)
+                    p.kill()
+                    p.join(timeout=5)
 
             results = []
             while not rq.empty():
