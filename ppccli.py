@@ -286,6 +286,7 @@ def cleanup_session():
     except: pass
 
 def safe_navigate(p, url, retries=3):
+    wp = worker_prefix()
     for attempt in range(retries):
         try:
             p.get(url)
@@ -293,9 +294,9 @@ def safe_navigate(p, url, retries=3):
             cu = safe_url(p)
             if "chrome-error" not in cu and "chromewebdata" not in cu:
                 return True
-            print(f"  [Nav] Chrome error attempt {attempt+1}, retrying...", flush=True)
+            print(f"{wp} [Nav] Chrome error attempt {attempt+1}, retrying...", flush=True)
         except Exception as e:
-            print(f"  [Nav] Exception attempt {attempt+1}: {e}", flush=True)
+            print(f"{wp} [Nav] Exception attempt {attempt+1}: {e}", flush=True)
             time.sleep(2)
     return False
 
@@ -308,6 +309,10 @@ def dismiss_dialogs(p):
         except: pass
         p.execute_script("window.alert=function(){};window.confirm=function(){return true;};window.prompt=function(){return'';}")
     except: pass
+
+def worker_prefix():
+    wid = os.environ.get("WORKER_ID")
+    return f"[Worker {wid}]" if wid is not None else "  "
 
 def safe_url(p):
     try: return p.execute_script("return window.location.href") or ""
@@ -937,6 +942,7 @@ def rotate_ip():
 def run_view(p, url):
     global MAIN_HANDLE
     MAIN_HANDLE = None
+    wp = worker_prefix()
     p.execute_cdp_cmd("Network.clearBrowserCookies", {})
     p.execute_cdp_cmd("Network.clearBrowserCache", {})
     try: p.execute_script("localStorage.clear(); sessionStorage.clear();")
@@ -986,7 +992,8 @@ def run_view(p, url):
 
         cu = safe_url(p)
         cd = urlparse(cu).netloc
-        print(f"  Hop {hop+1}: {cu[:80]}", flush=True)
+        wp = worker_prefix()
+        print(f"{wp} Hop {hop+1}: {cu[:80]}", flush=True)
 
         # Google CAPTCHA / sorry page — fast fail
         if "google.com/sorry" in cu or "/sorry/index" in cu:
@@ -1010,7 +1017,7 @@ def run_view(p, url):
                     ex_domains.append(cd)
                     continue
             except: pass
-            print(f"  Destination: {cu[:100]}", flush=True)
+            print(f"{wp} Destination: {cu[:100]}", flush=True)
             return True, cu
 
         # Same URL tracking
@@ -1026,7 +1033,7 @@ def run_view(p, url):
             same_text_count += 1
             has_indicators = any(ind in cur_text.lower() for ind in PPC_INDICATORS)
             if same_text_count >= 5 and not has_indicators:
-                print(f"  [Abort] Same page content {same_text_count}x with no indicators — skipping", flush=True)
+                print(f"{wp} [Abort] Same page content {same_text_count}x with no indicators — skipping", flush=True)
                 return False, None
         else:
             same_text_count = 0
@@ -1036,7 +1043,7 @@ def run_view(p, url):
         if same_url_count >= 8:
             stuck_count += 1
             if stuck_count >= 3:
-                print("  [Abort] Page stuck 3x — skipping", flush=True)
+                print(f"{wp} [Abort] Page stuck 3x — skipping", flush=True)
                 return False, None
             nuke_overlays(p)
             scroll_incremental(p, 15)
@@ -1052,14 +1059,14 @@ def run_view(p, url):
 
         # Initial goBtn click on linkpays.in (first hop)
         if hop == 0 and click_by_id(p, ["goBtn"]):
-            print("  [goBtn] Clicked — registering view...", flush=True)
+            print(f"{wp} [goBtn] Clicked — registering view...", flush=True)
             time.sleep(3)
             # Check if view counter request was tracked
             view_hit = p.execute_script("return window.__ppcView || null;") or ""
             if view_hit:
-                print(f"  [View] Counter confirmed: {view_hit[:60]}", flush=True)
+                print(f"{wp} [View] Counter confirmed: {view_hit[:60]}", flush=True)
             else:
-                print("  [View] No explicit counter request detected (view may still count)", flush=True)
+                print(f"{wp} [View] No explicit counter request detected (view may still count)", flush=True)
 
         # Skip action parsing on dead-end pages — go straight to destination scan
         cu_path = urlparse(cu).path.lower()
@@ -1123,7 +1130,7 @@ def run_view(p, url):
                 if txt.strip(): break
             except: pass
             time.sleep(1)
-        print(f"  Text: {txt[:120].replace(chr(10),' ')}", flush=True)
+        print(f"{wp} Text: {txt[:120].replace(chr(10),' ')}", flush=True)
         actions = parse_ppc_actions(txt)
         # Supplement text-based detection with template element ID checks
         if "timer" not in actions and "unlock" not in actions:
@@ -1145,7 +1152,7 @@ def run_view(p, url):
                     actions.append("get_link")
                 actions = list(OrderedDict.fromkeys(actions))
             except: pass
-        print(f"  Actions: {actions}", flush=True)
+        print(f"{wp} Actions: {actions}", flush=True)
         url_changed = False
 
         for a in actions:
@@ -1170,10 +1177,10 @@ def run_view(p, url):
             cu2 = safe_url(p)
             cd2 = urlparse(cu2).netloc
             if cd2 and not any(x in cd2 for x in ex_domains):
-                print(f"  Destination: {cu2[:80]}", flush=True)
+                print(f"{wp} Destination: {cu2[:80]}", flush=True)
                 return True, cu2
             if cu2 and cu2 != prev_url:
-                print(f"  URL changed: {cu2[:60]}", flush=True)
+                print(f"{wp} URL changed: {cu2[:60]}", flush=True)
                 # If still on same PPC domain after Continue, try more Continue clicks
                 if cd2 and any(x in cd2 for x in PPC_DOMAINS) and a == "scroll_continue":
                     for t2 in ["Gate Link","Get Link","Click Here","Proceed","Download","Destination Link","Continue","continue","CONTINUE"]:
@@ -1183,7 +1190,7 @@ def run_view(p, url):
                     cu3 = safe_url(p)
                     cd3 = urlparse(cu3).netloc
                     if cd3 and not any(x in cd3 for x in ex_domains):
-                        print(f"  Destination: {cu3[:80]}", flush=True)
+                        print(f"{wp} Destination: {cu3[:80]}", flush=True)
                         return True, cu3
                 break
 
@@ -1222,7 +1229,7 @@ def run_view(p, url):
             # PPC-domain article page with no indicators/actions — treat as final destination
             if cd and any(x in cd for x in PPC_DOMAINS) and not actions and txt.strip() and \
                not any(ind in txt.lower() for ind in PPC_INDICATORS):
-                print(f"  Destination (PPC article): {cu[:80]}", flush=True)
+                print(f"{wp} Destination (PPC article): {cu[:80]}", flush=True)
                 return True, cu
 
     # After hop loop exhausted
@@ -1285,6 +1292,7 @@ def _worker_process(url, worker_id, result_queue):
     vnc_port = 5900 + worker_id
     os.environ["DISPLAY"] = f":{display_num}"
     os.environ["VNC_PORT"] = str(vnc_port)
+    os.environ["WORKER_ID"] = str(worker_id)
     dest_url = None
     try:
         p = make_driver()
@@ -1368,15 +1376,20 @@ def orchestrate_parallel(urls, windows, same_ips, views, rotate, no_vnc, all_par
                 print(f"  [Started] {w['label']} — Display :{99 + w['id']}", flush=True)
 
             for p in procs:
-                p.join(timeout=180)
+                p.join(timeout=600)
                 if p.is_alive():
-                    print(f"  [Timeout] Worker still alive after 180s, killing...", flush=True)
+                    print(f"  [Timeout] Worker still alive after 600s, killing...", flush=True)
                     p.kill()
                     p.join(timeout=5)
 
             results = []
             while not rq.empty():
                 results.append(rq.get())
+            # Fill in missing workers (killed before they could report)
+            seen = {r[0] for r in results}
+            for w in group:
+                if w["id"] not in seen:
+                    results.append((w["id"], w["url"], False, None))
 
             elapsed = time.time() - session_start
             elapsed_str = f"{int(elapsed//60):02d}:{int(elapsed%60):02d}"
