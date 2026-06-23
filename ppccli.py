@@ -274,18 +274,16 @@ def cleanup_profile(p):
     except: pass
 
 def cleanup_session():
-    """Kill zombie Chrome processes and clean temp profiles.
+    """Kill zombie Chrome processes from old temp profiles only.
     Called at the START of every session before workers launch.
+    Does NOT kill chromedriver (would interfere with active workers).
     """
     try:
         for old_dir in glob.glob("/tmp/ppccli_*"):
             if os.path.isdir(old_dir):
                 subprocess.run(f"pkill -9 -f '{old_dir}' 2>/dev/null", shell=True)
                 subprocess.run(f"rm -rf '{old_dir}' 2>/dev/null", shell=True)
-        subprocess.run("pkill -9 -f 'chrome.*--user-data-dir=/tmp/ppccli_' 2>/dev/null", shell=True)
-        subprocess.run("pkill -9 -f chromedriver 2>/dev/null", shell=True)
     except: pass
-    time.sleep(1)
 
 def safe_navigate(p, url, retries=3):
     for attempt in range(retries):
@@ -911,7 +909,10 @@ def rotate_ip():
     for attempt in range(1, 11):
         print(f"  [IP] Toggle {attempt}/10", flush=True)
         _md()
-        time.sleep(8)
+        for s in range(8):
+            time.sleep(1)
+            print(".", end="", flush=True)
+        print("", flush=True)
         if _check_network(timeout=25):
             new_ip = check_ip()
             if new_ip and new_ip != old_ip:
