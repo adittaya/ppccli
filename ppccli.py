@@ -1050,6 +1050,12 @@ def run_view(p, url):
         if same_url_count >= 8:
             stuck_count += 1
             if stuck_count >= 3:
+                # Before aborting, check if this is a PPC-domain article with no indicators (final destination)
+                if cd and any(x in cd for x in PPC_DOMAINS) and not has_indicators:
+                    article_txt = (p.execute_script("return (document.body.innerText||'').trim().length") or 0)
+                    if article_txt > 100:
+                        print(f"{wp} Destination (PPC article): {cu[:80]}", flush=True)
+                        return True, cu
                 print(f"{wp} [Abort] Page stuck 3x — skipping", flush=True)
                 return False, None
             nuke_overlays(p)
