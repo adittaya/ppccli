@@ -383,24 +383,6 @@ def scroll_incremental(p, steps=8):
     except: pass
     time.sleep(0.3)
 
-def wait_on_destination(p, secs=8):
-    wp = worker_prefix()
-    try:
-        for _ in range(10):
-            rs = p.execute_script("return document.readyState") or ""
-            if rs == "complete":
-                break
-            time.sleep(0.5)
-        nuke_overlays(p)
-        for i in range(secs):
-            if i % 3 == 0:
-                try: p.execute_script("window.scrollBy(0, 300);")
-                except: pass
-            time.sleep(1)
-    except:
-        time.sleep(secs)
-    print(f"{wp}  ...destination wait done ({secs}s)", flush=True)
-
 def check_tab_dest(p, ex_domains):
     try:
         cu = safe_url(p)
@@ -1313,7 +1295,6 @@ def worker(url, total_views):
                 ok, dest_url = run_view(p, url)
             if ok and dest_url:
                 print(f"  {'[✓] SUCCESS'}  → {dest_url[:100]}", flush=True)
-                wait_on_destination(p, 8)
             else:
                 print(f"  {'[✓] SUCCESS' if ok else '[✗] FAILED'}", flush=True)
     finally:
@@ -1336,8 +1317,6 @@ def _worker_process(url, worker_id, result_queue):
         p = make_driver()
         try:
             ok, dest_url = run_view(p, url)
-            if ok:
-                wait_on_destination(p, 8)
         finally:
             cleanup_profile(p)
     except Exception as e:
